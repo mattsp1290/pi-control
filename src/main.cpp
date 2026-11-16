@@ -19,8 +19,10 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addOption({"dry-run", "Simulate shutdown without powering off."});
     parser.addOption({"smoke-test", "Exercise the real button safely and exit."});
+    parser.addOption({"smoke-test-failure", "Safely exercise a disconnected shutdown bus and exit."});
     parser.process(app);
-    const bool smoke = parser.isSet("smoke-test");
+    const bool failureTest = parser.isSet("smoke-test-failure");
+    const bool smoke = parser.isSet("smoke-test") || failureTest;
     const bool dryRun = smoke || parser.isSet("dry-run");
 
     QWidget screen;
@@ -48,7 +50,7 @@ int main(int argc, char** argv) {
     bool simulated = false;
     QObject::connect(button, &QPushButton::clicked, &screen, [&] {
         button->setEnabled(false);
-        if (dryRun) {
+        if (dryRun && !failureTest) {
             simulated = true;
             status->setText("Dry run: shutdown requested");
             fmt::print("Dry run: PowerOff(false) was not sent.\n");
@@ -59,24 +61,35 @@ int main(int argc, char** argv) {
             "org.freedesktop.login1", "/org/freedesktop/login1",
             "org.freedesktop.login1.Manager", "PowerOff");
         message << false; // Never prompt for credentials in a boot kiosk.
-        auto* watcher = new QDBusPendingCallWatcher(
-            QDBusConnection::systemBus().asyncCall(message, 10000), &screen);
-        QObject::connect(watcher, &QDBusPendingCallWatcher::finished, &screen,
-                         [=](QDBusPendingCallWatcher* call) {
+        // An unregistered connection is always disconnected: tests cannot reach logind.
+        const auto bus = failureTest ? QDBusConnection(QStringLiteral("pi-control-test-disconnected"))
+                                     : QDBusConnection::systemBus();
+        auto* watcher = new QDBusPendingCallWatcher(bus.asyncCall(message, 10000), &screen);
+        const auto finished = [=, &app](QDBusPendingCallWatcher* call) {
             const QDBusPendingReply<> reply = *call;
             if (reply.isError()) {
                 fmt::print(stderr, "Shutdown failed: {}\n", reply.error().message().toStdString());
                 status->setText("Shutdown failed. Check the service journal and try again.");
                 button->setEnabled(true);
             }
+            if (failureTest) {
+                app.exit(reply.isError() && button->isEnabled()
+                         && status->text().startsWith("Shutdown failed") ? 0 : 1);
+            }
             call->deleteLater();
-        });
+        };
+        if (watcher->isFinished()) {
+            QTimer::singleShot(0, &screen, [=] { finished(watcher); });
+        } else {
+            QObject::connect(watcher, &QDBusPendingCallWatcher::finished, &screen, finished);
+        }
     });
     screen.showFullScreen();
     button->setFocus();
     if (smoke) {
         QTimer::singleShot(0, &screen, [&] {
             button->click();
+            if (failureTest) return; // Completion is checked by the asynchronous callback.
             app.exit(simulated && !button->isEnabled()
                      && status->text() == "Dry run: shutdown requested" ? 0 : 1);
         });

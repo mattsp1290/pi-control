@@ -12,7 +12,7 @@ On the Pi (or Debian desktop for development):
 
 ```sh
 sudo apt update
-sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-qpa-plugins libegl1 libgles2 libgbm1 libinput10 libqt6gui6 policykit-1
+sudo apt install git build-essential cmake ninja-build qt6-base-dev qt6-qpa-plugins libegl1 libgles2 libgbm1 libinput10 libqt6gui6 policykit-1
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -49,7 +49,15 @@ poweroff requests including when SSH sessions exist, but never inhibitor
 bypass. No sudo password or root GUI is needed. `NoNewPrivileges` does not
 prevent the system-bus authorization performed by logind/polkit.
 
-Inspect `journalctl -u pi-control -b` if startup or shutdown fails. Verify the
+Inspect `journalctl -u pi-control -b` if startup or shutdown fails. After fixing
+a problem that exhausted the startup retry limit, clear the failure and restart:
+
+```sh
+sudo systemctl reset-failed pi-control.service
+sudo systemctl restart pi-control.service
+```
+
+Verify the
 screen and touch input on the actual Pi, then reboot to verify autostart and
 press the button to verify orderly poweroff. These hardware checks cannot be
 proven by the offscreen test. Display output/card selection can be customized
