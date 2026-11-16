@@ -20,7 +20,8 @@ public:
     virtual ~Screensaver() = default;
     // Called once per activation before the first advance()/paint().
     virtual void start(QSize size, quint32 seed) = 0;
-    // Called when the view size changes while active.
+    // Called when the view size changes while active; never with the size
+    // already passed to start() or the previous resize().
     virtual void resize(QSize size) = 0;
     // Advance simulation time; dt is already clamped by the view.
     virtual void advance(std::chrono::milliseconds dt) = 0;

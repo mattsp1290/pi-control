@@ -144,6 +144,65 @@ private slots:
         counter_.reset();
     }
 
+    void pressHeldOffButtonDefersActivation() {
+        build(defaultConfig());
+        const QPoint margin(2, 2); // Inside the window, outside the button.
+        QVERIFY(!button_->geometry().contains(margin));
+        QTest::touchEvent(window(), touchDevice()).press(0, margin);
+        QTest::qWait(1000);
+        QCOMPARE(controller_->state(), State::Watching);
+        QTest::touchEvent(window(), touchDevice()).release(0, margin);
+        waitUntilActive();
+        QCOMPARE(clicked_->count(), 0);
+    }
+
+    void longTouchWakeAfterCappedDeferralNeverClicks() {
+        auto config = defaultConfig();
+        config.maxWakeGuard = 500ms;
+        config.maxHoldDeferral = 600ms;
+        build(std::move(config));
+        touchPress(); // Rests on the button until the deferral cap.
+        waitUntilActive();
+        touchRelease(); // Swallowed: the button stays down.
+        touchPress();   // Wake, held past maxWakeGuard.
+        QTest::qWait(800);
+        QCOMPARE(controller_->state(), State::Watching);
+        touchRelease();
+        QCOMPARE(clicked_->count(), 0);
+        touchPress();
+        touchRelease();
+        QCOMPARE(clicked_->count(), 1);
+    }
+
+    void longMouseWakeAfterCappedDeferralNeverClicks() {
+        auto config = defaultConfig();
+        config.maxWakeGuard = 500ms;
+        config.maxHoldDeferral = 600ms;
+        build(std::move(config));
+        QTest::mousePress(window(), Qt::LeftButton, {}, buttonCenter());
+        waitUntilActive();
+        QTest::mouseRelease(window(), Qt::LeftButton, {}, buttonCenter());
+        QTest::mousePress(window(), Qt::LeftButton, {}, buttonCenter());
+        QTest::qWait(800);
+        QCOMPARE(controller_->state(), State::Watching);
+        QTest::mouseRelease(window(), Qt::LeftButton, {}, buttonCenter());
+        QCOMPARE(clicked_->count(), 0);
+        click();
+        QCOMPARE(clicked_->count(), 1);
+    }
+
+    void shortcutWhileActiveDoesNotFire() {
+        build(defaultConfig());
+        button_->setShortcut(Qt::Key_S);
+        // The QWidget overload goes through the shortcut map, like a real key.
+        QTest::keyClick(button_, Qt::Key_S); // Positive control while watching.
+        QTRY_COMPARE(clicked_->count(), 1);  // Shortcuts use animateClick().
+        waitUntilActive();
+        QTest::keyClick(button_, Qt::Key_S);
+        QTest::qWait(400);
+        QCOMPARE(clicked_->count(), 1);
+    }
+
     void defaultConfigUsesFifteenSeconds() {
         const ScreensaverControllerConfig config;
         QCOMPARE(config.idleTimeout, kIdleTimeout);

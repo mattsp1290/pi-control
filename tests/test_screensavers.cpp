@@ -191,6 +191,17 @@ private slots:
         QCOMPARE(zoom.brightness(), 1.0);
     }
 
+    void mandelbrotRendersIntoASharedImageCopy() {
+        QImage original(64, 36, QImage::Format_RGB32);
+        original.fill(kUnpainted);
+        QImage shared = original;
+        renderMandelbrot(shared, -0.5, 0.0, 1.5, 100, makeMandelbrotPalette(), 0.0);
+        QCOMPARE(original.pixel(0, 0), kUnpainted);
+        for (int y = 0; y < shared.height(); ++y) {
+            for (int x = 0; x < shared.width(); ++x) QVERIFY(shared.pixel(x, y) != kUnpainted);
+        }
+    }
+
     void everyZoomTargetHasDetailAtFloor() {
         const auto palette = makeMandelbrotPalette();
         for (const auto& target : mandelbrotZoomTargets()) {

@@ -17,7 +17,7 @@ struct ScreensaverDescriptor {
     std::function<std::unique_ptr<Screensaver>()> create;
 };
 
-// Every built-in screensaver. Adding a screensaver means adding one entry here.
+// Every built-in screensaver. See docs/screensavers.md to add one.
 const std::vector<ScreensaverDescriptor>& builtinScreensavers();
 
 // The built-in descriptor with this id, or nullptr.

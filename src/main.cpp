@@ -29,7 +29,8 @@ int main(int argc, char** argv) {
     QStringList screensaverIds;
     for (const auto& descriptor : builtinScreensavers()) screensaverIds << descriptor.id;
     const QCommandLineOption screensaverOption(
-        "screensaver", "Always show this screensaver: " + screensaverIds.join(", ") + ".", "id");
+        "screensaver", "Use only this screensaver (still starts after 15 s idle): " + screensaverIds.join(", ") + ".",
+        "id");
     parser.addOption(screensaverOption);
     parser.process(app);
     ScreensaverControllerConfig saverConfig;

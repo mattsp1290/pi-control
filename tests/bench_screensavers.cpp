@@ -1,5 +1,7 @@
-// Manual frame-time benchmark; run on the target Pi, not part of ctest:
-//   QT_QPA_PLATFORM=offscreen ./build/screensaver-bench
+// Manual frame-time benchmark; run a Release build on the target Pi, not part of ctest:
+//   cmake -S . -B build-bench -G Ninja -DCMAKE_BUILD_TYPE=Release
+//   cmake --build build-bench --target screensaver-bench
+//   QT_QPA_PLATFORM=offscreen ./build-bench/screensaver-bench
 #include "screensaver/mandelbrot.h"
 #include "screensaver/registry.h"
 
@@ -46,6 +48,9 @@ std::vector<double> time(int warmup, int frames, const std::function<void()>& fr
 
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+#ifndef NDEBUG
+    fmt::print(stderr, "Warning: unoptimised build; configure with -DCMAKE_BUILD_TYPE=Release for real numbers.\n");
+#endif
     for (const auto& descriptor : builtinScreensavers()) {
         for (const QSize size : {QSize(800, 480), QSize(1920, 1080)}) {
             auto saver = descriptor.create();

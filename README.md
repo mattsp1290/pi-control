@@ -37,8 +37,9 @@ pressing the shutdown button. To preview one on a desktop:
 ./build/pi-control --dry-run --screensaver mandelbrot
 ```
 
-Ids are `life`, `mandelbrot` and `water`. See [Screensavers](docs/screensavers.md)
-for the architecture and how to add one.
+`pi-control --help` lists the screensaver ids. The preview still starts after
+15 seconds idle. See [Screensavers](docs/screensavers.md) for the architecture
+and how to add one.
 
 ## Install, update, and start on boot
 

@@ -22,11 +22,25 @@ Rendering is CPU-only: each screensaver draws into a reduced-resolution
 `QImage` that is scaled to the screen. The Mandelbrot renderer uses every core
 through `QtConcurrent`.
 
+Animation runs for as long as the kiosk stays idle; there is no run limit.
+Measured sustained load on a Raspberry Pi 4 (Release build, 1920×1080):
+Mandelbrot about one core, water about half a core, Life about 6 % of a core.
+Keep the Pi cooled accordingly and check `vcgencmd get_throttled` after a long
+run.
+
 The controller's states are `Watching`, `Active` and `WakeGuard`. A wake
 event moves `Active` to `WakeGuard`, which consumes every input event until
 all buttons, touch points and keys are released and at least 250 ms have
-passed. A lost release cannot block input for more than 3 s
-(`kMaxWakeGuard`).
+passed. A lost release cannot block new input for more than 3 s
+(`kMaxWakeGuard`). If a press is still held when that limit expires, new
+presses work again but the moves and release of the held press are still
+swallowed. Keyboard shortcuts never fire while the screensaver or its guard
+is active.
+
+The screensaver does not start while a press is held: covering a press that a
+widget has already seen would swallow its release and leave that widget
+pressed. Activation waits for the release, for at most 60 s
+(`kMaxHoldDeferral`) in case the release was lost.
 
 ## Add a screensaver
 
@@ -40,15 +54,18 @@ passed. A lost release cannot block input for more than 3 s
 4. Add simulation tests to `tests/test_screensavers.cpp`. The registry-driven
    tests already check that every screensaver paints every pixel, is
    deterministic for a seed and survives empty and odd sizes.
-5. Build the benchmark and run it on a Raspberry Pi 4. Each screensaver
-   should stay under 50 ms per frame at 1920×1080:
+5. Build the benchmark in Release and run it on a Raspberry Pi 4. Each
+   screensaver should stay under 50 ms per frame at 1920×1080 (Debug builds
+   are several times slower):
 
    ```sh
-   cmake --build build --target screensaver-bench
-   QT_QPA_PLATFORM=offscreen ./build/screensaver-bench
+   cmake -S . -B build-bench -G Ninja -DCMAKE_BUILD_TYPE=Release
+   cmake --build build-bench --target screensaver-bench
+   QT_QPA_PLATFORM=offscreen ./build-bench/screensaver-bench
    ```
 
-6. Preview it: `./build/pi-control --dry-run --screensaver <id>`.
+6. Preview it: `./build/pi-control --dry-run --screensaver <id>`. It still
+   starts after 15 seconds without input.
 
 No controller, view or `main.cpp` change is needed.
 

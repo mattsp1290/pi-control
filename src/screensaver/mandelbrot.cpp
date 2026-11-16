@@ -103,11 +103,14 @@ void renderMandelbrot(QImage& image, double cx, double cy, double scale, int max
     const int bandCount = std::max(1, std::min(height, QThread::idealThreadCount() * 2));
     std::vector<int> bands(static_cast<std::size_t>(bandCount));
     std::iota(bands.begin(), bands.end(), 0);
+    // Detach once here: QImage::scanLine() detaches and is not thread-safe.
+    uchar* const bits = image.bits();
+    const qsizetype stride = image.bytesPerLine();
     QtConcurrent::blockingMap(bands, [&](int band) {
         const int firstRow = height * band / bandCount;
         const int lastRow = height * (band + 1) / bandCount;
         for (int row = firstRow; row < lastRow; ++row) {
-            auto* line = reinterpret_cast<QRgb*>(image.scanLine(row));
+            auto* line = reinterpret_cast<QRgb*>(bits + row * stride);
             const double y = cy - (row - height / 2.0 + 0.5) * pixel;
             for (int column = 0; column < width; ++column) {
                 const double x = cx + (column - width / 2.0 + 0.5) * pixel;

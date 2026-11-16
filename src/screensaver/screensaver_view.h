@@ -41,7 +41,9 @@ private:
     QTimer frameTimer_;
     QElapsedTimer frameClock_;
     QElapsedTimer paintClock_;
-    std::vector<float> frameIntervals_;
+    std::vector<float> frameIntervals_; // Ring buffer of the most recent intervals.
+    std::size_t frameCount_ = 0;
+    QSize saverSize_;
 };
 
 } // namespace pi_control::screensaver

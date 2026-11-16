@@ -48,8 +48,10 @@ void ScreensaverView::activate(QString id, std::unique_ptr<Screensaver> saver, q
     if (parentWidget()) setGeometry(parentWidget()->rect());
     id_ = std::move(id);
     saver_ = std::move(saver);
-    saver_->start(size(), seed);
+    saverSize_ = size();
+    saver_->start(saverSize_, seed);
     frameIntervals_.clear();
+    frameCount_ = 0;
     paintClock_.invalidate();
     raise();
     show();
@@ -82,7 +84,11 @@ bool ScreensaverView::eventFilter(QObject* watched, QEvent* event) {
 
 void ScreensaverView::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    if (saver_) saver_->resize(size());
+    // show() delivers the pending resize for the size start() already used.
+    if (saver_ && size() != saverSize_) {
+        saverSize_ = size();
+        saver_->resize(saverSize_);
+    }
 }
 
 void ScreensaverView::paintEvent(QPaintEvent*) {
@@ -91,8 +97,11 @@ void ScreensaverView::paintEvent(QPaintEvent*) {
         painter.fillRect(rect(), Qt::black);
         return;
     }
-    if (paintClock_.isValid() && frameIntervals_.size() < kMaxFrameSamples) {
-        frameIntervals_.push_back(float(paintClock_.nsecsElapsed()) / 1.0e6f);
+    if (paintClock_.isValid()) {
+        const float interval = float(paintClock_.nsecsElapsed()) / 1.0e6f;
+        if (frameIntervals_.size() < kMaxFrameSamples) frameIntervals_.push_back(interval);
+        else frameIntervals_[frameCount_ % kMaxFrameSamples] = interval;
+        ++frameCount_;
     }
     paintClock_.start();
     saver_->paint(painter, rect());
@@ -100,9 +109,9 @@ void ScreensaverView::paintEvent(QPaintEvent*) {
 
 void ScreensaverView::logFrameStatistics() {
     if (frameIntervals_.size() < kMinFramesForStatistics) return;
-    fmt::print(stderr, "Screensaver {}: {} frames, median {:.1f} ms, p95 {:.1f} ms\n",
-               id_.toStdString(), frameIntervals_.size() + 1,
-               percentile(frameIntervals_, 0.5), percentile(frameIntervals_, 0.95));
+    fmt::print(stderr, "Screensaver {}: {} frames, median {:.1f} ms, p95 {:.1f} ms (last {} frames)\n",
+               id_.toStdString(), frameCount_ + 1, percentile(frameIntervals_, 0.5),
+               percentile(frameIntervals_, 0.95), frameIntervals_.size());
 }
 
 } // namespace pi_control::screensaver
