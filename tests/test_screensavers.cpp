@@ -1,6 +1,7 @@
 #include "screensaver/life.h"
 #include "screensaver/mandelbrot.h"
 #include "screensaver/registry.h"
+#include "screensaver/water.h"
 
 #include <QImage>
 #include <QPainter>
@@ -214,6 +215,39 @@ private slots:
             QVERIFY2(fraction >= 0.05, qPrintable(label));
             QVERIFY2(colors.size() >= 64, qPrintable(label));
         }
+    }
+
+    void waterDropSpreadsSymmetrically() {
+        WaveField field;
+        field.resize(41, 41);
+        field.drop(20, 20, 4, 1.0f);
+        for (int i = 0; i < 20; ++i) field.step();
+        for (int dy = -12; dy <= 12; ++dy) {
+            for (int dx = -12; dx <= 12; ++dx) {
+                const float h = field.height(20 + dx, 20 + dy);
+                QVERIFY(std::abs(h - field.height(20 - dx, 20 + dy)) < 1e-4f);
+                QVERIFY(std::abs(h - field.height(20 + dx, 20 - dy)) < 1e-4f);
+                QVERIFY(std::abs(h - field.height(20 + dy, 20 + dx)) < 1e-4f);
+            }
+        }
+        QVERIFY(std::abs(field.height(20, 30)) > 1e-4f); // The ripple has travelled.
+    }
+
+    void waterRipplesDecay() {
+        WaveField field;
+        field.resize(60, 40);
+        field.drop(30, 20, 5, 1.0f);
+        const float initial = field.energy();
+        QVERIFY(initial > 0.0f);
+        for (int i = 0; i < 600; ++i) field.step();
+        QVERIFY(field.energy() < 0.05f * initial);
+    }
+
+    void waterFlatFieldStaysFlat() {
+        WaveField field;
+        field.resize(30, 20);
+        for (int i = 0; i < 100; ++i) field.step();
+        QCOMPARE(field.energy(), 0.0f);
     }
 
     void everyScreensaverAcceptsZeroAndOddSizes() {

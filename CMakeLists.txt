@@ -12,7 +12,8 @@ add_library(pi_control_screensaver STATIC
   src/screensaver/mandelbrot.cpp
   src/screensaver/registry.cpp
   src/screensaver/screensaver_controller.cpp
-  src/screensaver/screensaver_view.cpp)
+  src/screensaver/screensaver_view.cpp
+  src/screensaver/water.cpp)
 target_include_directories(pi_control_screensaver PUBLIC src)
 target_link_libraries(pi_control_screensaver PUBLIC Qt6::Widgets Qt6::Concurrent fmt::fmt)
 target_compile_options(pi_control_screensaver PRIVATE -Wall -Wextra -Wpedantic)
