@@ -47,7 +47,14 @@ class ScreensaverController final : public QObject {
     Q_OBJECT
 
 public:
-    enum class State { Watching, Active, WakeGuard };
+    enum class State {
+        Watching,  // Idle timer runs; input passes through.
+        Draining,  // Like Watching, but the moves and release of a gesture that
+                   // outlived the wake guard are swallowed until it ends or a
+                   // new press starts.
+        Active,    // Screensaver visible; all input consumed.
+        WakeGuard, // Just dismissed; the waking gesture is consumed.
+    };
 
     ScreensaverController(ScreensaverView& view, ScreensaverControllerConfig config, QObject* parent = nullptr);
     ~ScreensaverController() override;
@@ -72,7 +79,9 @@ private:
     void trackHeldInput(QEvent* event);
     void clearHeldInput();
     void checkWakeGuard();
-    void enterWatching();
+    void enterWatching(State next); // next is Watching or Draining.
+    bool watching() const { return state_ == State::Watching || state_ == State::Draining; }
+    bool enabled() const { return !config_.candidates.empty(); }
     bool anythingHeld() const;
     static bool isNewPress(const QEvent* event);
 
@@ -80,14 +89,12 @@ private:
     ScreensaverControllerConfig config_;
     State state_ = State::Watching;
     bool inhibited_ = false;
-    bool enabled_ = true;
     QString activeId_;
     QTimer idleTimer_;
     QTimer guardTimer_;
     QElapsedTimer sinceActivity_;
     QElapsedTimer guardClock_;
     QElapsedTimer heldSince_;
-    bool orphaned_ = false; // Swallowing the tail of a gesture that outlived the guard.
     Qt::MouseButtons heldButtons_;
     QSet<int> heldTouchPoints_;
     QSet<quint32> heldKeys_;

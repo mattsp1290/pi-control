@@ -62,8 +62,7 @@ ScreensaverController::ScreensaverController(ScreensaverView& view, ScreensaverC
     guardTimer_.setTimerType(Qt::PreciseTimer);
     connect(&guardTimer_, &QTimer::timeout, this, &ScreensaverController::checkWakeGuard);
 
-    enabled_ = !config_.candidates.empty();
-    if (!enabled_) {
+    if (!enabled()) {
         fmt::print(stderr, "Screensaver: no candidates; disabled\n");
         return;
     }
@@ -78,7 +77,7 @@ ScreensaverController::~ScreensaverController() {
 
 void ScreensaverController::setInhibited(bool inhibited) {
     inhibited_ = inhibited;
-    if (!enabled_) return;
+    if (!enabled()) return;
     if (inhibited) {
         idleTimer_.stop();
         if (state_ == State::Active) {
@@ -86,7 +85,7 @@ void ScreensaverController::setInhibited(bool inhibited) {
             activeId_.clear();
             state_ = State::Watching;
         }
-    } else if (state_ == State::Watching) {
+    } else if (watching()) {
         restartIdleTimer();
     }
 }
@@ -101,7 +100,7 @@ bool ScreensaverController::anythingHeld() const {
 }
 
 void ScreensaverController::activate() {
-    if (!view_ || inhibited_ || state_ != State::Watching || config_.candidates.empty()) return;
+    if (!view_ || inhibited_ || !watching() || !enabled()) return;
     // A press resting on the screen sends no events. Covering it would swallow
     // its release and leave the widget under it pressed, so wait for release,
     // up to a cap in case the release was lost.
@@ -176,16 +175,14 @@ void ScreensaverController::trackHeldInput(QEvent* event) {
 void ScreensaverController::checkWakeGuard() {
     if (state_ != State::WakeGuard) return;
     const auto elapsed = std::chrono::milliseconds(guardClock_.elapsed());
-    const bool released = heldButtons_ == Qt::NoButton && heldTouchPoints_.isEmpty() && heldKeys_.isEmpty();
-    if (released && elapsed >= config_.wakeGuard) {
-        enterWatching();
+    if (!anythingHeld() && elapsed >= config_.wakeGuard) {
+        enterWatching(State::Watching);
         return;
     }
     if (elapsed >= config_.maxWakeGuard) {
         // Something is still held, or its release was lost. Stop blocking new
-        // input, but keep swallowing the rest of this gesture (see eventFilter).
-        orphaned_ = anythingHeld();
-        enterWatching();
+        // input, but drain the rest of this gesture (see eventFilter).
+        enterWatching(anythingHeld() ? State::Draining : State::Watching);
         return;
     }
     // Re-check when the minimum guard ends, or force an exit at the maximum.
@@ -193,10 +190,10 @@ void ScreensaverController::checkWakeGuard() {
     guardTimer_.start(std::max(std::chrono::milliseconds(1), next - elapsed));
 }
 
-void ScreensaverController::enterWatching() {
+void ScreensaverController::enterWatching(State next) {
     guardTimer_.stop();
-    if (!orphaned_) clearHeldInput();
-    state_ = State::Watching;
+    if (next == State::Watching) clearHeldInput();
+    state_ = next;
     restartIdleTimer();
 }
 
@@ -219,28 +216,28 @@ bool ScreensaverController::eventFilter(QObject* watched, QEvent* event) {
         // Releases may be lost while inactive. During the wake guard the held
         // state must survive, or the guard would end mid-gesture.
         clearHeldInput();
-        orphaned_ = false;
+        if (state_ == State::Draining) state_ = State::Watching;
     }
     // Shortcuts are dispatched before the key press; never let one fire under
     // the screensaver or during its wake guard.
     if ((event->type() == QEvent::Shortcut || event->type() == QEvent::ShortcutOverride)
-        && state_ != State::Watching) {
+        && (state_ == State::Active || state_ == State::WakeGuard)) {
         return true;
     }
     const InputKind kind = classify(event->type());
     if (kind == InputKind::None) return QObject::eventFilter(watched, event);
     switch (state_) {
-    case State::Watching:
-        if (orphaned_) {
-            if (!isNewPress(event)) {
-                // The rest of a gesture that outlived the wake guard.
-                trackHeldInput(event);
-                orphaned_ = anythingHeld();
-                return true;
-            }
-            orphaned_ = false;
-            clearHeldInput();
+    case State::Draining:
+        if (!isNewPress(event)) {
+            // The rest of a gesture that outlived the wake guard.
+            trackHeldInput(event);
+            if (!anythingHeld()) state_ = State::Watching;
+            return true;
         }
+        state_ = State::Watching;
+        clearHeldInput();
+        [[fallthrough]];
+    case State::Watching:
         if (event->spontaneous()) {
             const bool wasHeld = anythingHeld();
             trackHeldInput(event);

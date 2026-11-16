@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QRect>
 #include <QSize>
 #include <QtGlobal>
@@ -45,5 +46,36 @@ inline QSize scaledToBudget(QSize view, int maxPixels) {
     }
     return {width, height};
 }
+
+// Linear blend from one colour to another; t in [0, 1].
+inline QRgb lerpRgb(QColor from, QColor to, double t) {
+    return qRgb(int(from.red() + (to.red() - from.red()) * t), int(from.green() + (to.green() - from.green()) * t),
+                int(from.blue() + (to.blue() - from.blue()) * t));
+}
+
+// Turns variable frame times into a whole number of fixed simulation steps,
+// at most maxSteps per frame so a stall cannot snowball.
+template <class Duration>
+class FixedStep {
+public:
+    FixedStep(Duration step, int maxSteps) : step_(step), maxSteps_(maxSteps) {}
+    void reset() { pending_ = Duration::zero(); }
+    // Adds dt and returns how many steps to run now.
+    int take(Duration dt) {
+        pending_ += dt;
+        int steps = 0;
+        while (steps < maxSteps_ && pending_ >= step_) {
+            pending_ -= step_;
+            ++steps;
+        }
+        pending_ = std::min(pending_, step_);
+        return steps;
+    }
+
+private:
+    Duration step_;
+    int maxSteps_;
+    Duration pending_{};
+};
 
 } // namespace pi_control::screensaver

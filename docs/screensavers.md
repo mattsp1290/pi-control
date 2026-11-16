@@ -14,6 +14,7 @@ All code lives in `src/screensaver/` and builds into the
 | Component | Responsibility |
 | --- | --- |
 | `Screensaver` (`screensaver.h`) | Interface one animation implements: `start`, `resize`, time-based `advance`, `paint`. No timers, widgets or input. All randomness derives from the `start` seed. |
+| `RasterScreensaver` (`raster_screensaver.h`) | Base for screensavers that draw a reduced-resolution frame: owns the frame, redraws it only when the simulation moved, scales it to the view. Subclasses implement `render(QImage&)`. `FixedStep` (`screensaver.h`) turns frame times into fixed simulation steps. |
 | Registry (`registry.h/.cpp`) | `builtinScreensavers()` lists every screensaver by id, name and factory. `--screensaver` help text and validation come from it. |
 | `ScreensaverView` | Child widget covering the shutdown screen. Drives the active screensaver at about 30 Hz and logs frame statistics to stderr when dismissed. |
 | `ScreensaverController` | Application-wide event filter. Owns the 15 s idle timer (`kIdleTimeout`), random selection, the wake guard and shutdown inhibition. |
@@ -44,9 +45,11 @@ pressed. Activation waits for the release, for at most 60 s
 
 ## Add a screensaver
 
-1. Add `src/screensaver/<id>.h` and `<id>.cpp` with a class implementing
-   `Screensaver`. Keep simulation logic in a separate, widget-free class so it
-   can be unit tested.
+1. Add `src/screensaver/<id>.h` and `<id>.cpp` with a class deriving from
+   `RasterScreensaver` (or `Screensaver` for anything that does not draw a
+   scaled frame). Call `setFrameSize()` from `start`/`resize`, `invalidate()`
+   when the simulation advances, and draw in `render()`. Keep simulation logic
+   in a separate, widget-free class so it can be unit tested.
 2. Add one entry to `builtinScreensavers()` in `src/screensaver/registry.cpp`.
    Ids are lowercase (`^[a-z][a-z0-9-]*$`) and unique.
 3. Add the `.cpp` file to the `pi_control_screensaver` source list in

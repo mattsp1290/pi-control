@@ -1,6 +1,6 @@
 #pragma once
 
-#include "screensaver/screensaver.h"
+#include "screensaver/raster_screensaver.h"
 
 #include <QImage>
 
@@ -53,18 +53,19 @@ private:
     int cycles_ = 0;
 };
 
-class MandelbrotScreensaver final : public Screensaver {
+class MandelbrotScreensaver final : public RasterScreensaver {
 public:
+    MandelbrotScreensaver();
     void start(QSize size, quint32 seed) override;
     void resize(QSize size) override;
     void advance(std::chrono::milliseconds dt) override;
-    void paint(QPainter& painter, const QRect& target) override;
 
 private:
+    void render(QImage& frame) override;
+    void paintOverlay(QPainter& painter, const QRect& target) override;
+
     MandelbrotZoom zoom_;
     MandelbrotPalette palette_{};
-    QImage image_;
-    bool dirty_ = true;
 };
 
 } // namespace pi_control::screensaver

@@ -56,9 +56,7 @@ QImage makePoolFloor(QSize size, std::mt19937& random) {
         for (int x = 0; x < size.width(); ++x) {
             const auto i = std::size_t(y * size.width() + x);
             const float t = std::clamp(0.7f * coarse[i] + 0.3f * fine[i], 0.0f, 1.0f);
-            line[x] = qRgb(int(teal.red() + (sand.red() - teal.red()) * t),
-                           int(teal.green() + (sand.green() - teal.green()) * t),
-                           int(teal.blue() + (sand.blue() - teal.blue()) * t));
+            line[x] = lerpRgb(teal, sand, t);
         }
     }
     return floor;
@@ -116,6 +114,9 @@ float WaveField::energy() const {
     return sum;
 }
 
+WaterScreensaver::WaterScreensaver()
+    : RasterScreensaver(qRgb(0x06, 0x3a, 0x6e), true), clock_(Seconds(kStepSeconds), kMaxStepsPerAdvance) {}
+
 void WaterScreensaver::start(QSize size, quint32 seed) {
     random_.seed(seed);
     resize(size);
@@ -125,10 +126,9 @@ void WaterScreensaver::resize(QSize size) {
     const QSize internal = scaledToBudget(size, kMaxPixels);
     field_.resize(internal.width(), internal.height());
     floor_ = internal.isEmpty() ? QImage() : makePoolFloor(internal, random_);
-    image_ = internal.isEmpty() ? QImage() : QImage(internal, QImage::Format_RGB32);
-    pendingSeconds_ = 0.0;
+    setFrameSize(internal);
+    clock_.reset();
     scheduleNextDrop();
-    dirty_ = true;
 }
 
 void WaterScreensaver::scheduleNextDrop() {
@@ -137,9 +137,7 @@ void WaterScreensaver::scheduleNextDrop() {
 
 void WaterScreensaver::advance(std::chrono::milliseconds dt) {
     if (field_.width() == 0) return;
-    pendingSeconds_ += dt.count() / 1000.0;
-    for (int i = 0; i < kMaxStepsPerAdvance && pendingSeconds_ >= kStepSeconds; ++i) {
-        pendingSeconds_ -= kStepSeconds;
+    for (int steps = clock_.take(Seconds(dt.count() / 1000.0)); steps > 0; --steps) {
         untilDrop_ -= kStepSeconds;
         while (untilDrop_ <= 0.0) {
             std::uniform_int_distribution<int> x(0, field_.width() - 1);
@@ -150,19 +148,18 @@ void WaterScreensaver::advance(std::chrono::milliseconds dt) {
             untilDrop_ += std::exponential_distribution<double>(kDropsPerSecond)(random_);
         }
         field_.step();
-        dirty_ = true;
+        invalidate();
     }
-    pendingSeconds_ = std::min(pendingSeconds_, kStepSeconds);
 }
 
-void WaterScreensaver::render() {
+void WaterScreensaver::render(QImage& frame) {
     const int width = field_.width();
     const int height = field_.height();
     // Light from the upper left; the highlight is the Blinn-Phong term of the
     // surface normal (-dx, -dy, 1) against this direction.
     const float lx = -0.35f, ly = -0.35f, lz = 0.87f;
     for (int y = 0; y < height; ++y) {
-        auto* line = reinterpret_cast<QRgb*>(image_.scanLine(y));
+        auto* line = reinterpret_cast<QRgb*>(frame.scanLine(y));
         for (int x = 0; x < width; ++x) {
             const float dx = field_.height(x + 1, y) - field_.height(x - 1, y);
             const float dy = field_.height(x, y + 1) - field_.height(x, y - 1);
@@ -178,18 +175,6 @@ void WaterScreensaver::render() {
             line[x] = qRgb(shade(qRed(base), 0x06), shade(qGreen(base), 0x3a), shade(qBlue(base), 0x6e));
         }
     }
-    dirty_ = false;
-}
-
-void WaterScreensaver::paint(QPainter& painter, const QRect& target) {
-    if (target.isEmpty()) return;
-    if (image_.isNull()) {
-        painter.fillRect(target, QColor(0x06, 0x3a, 0x6e));
-        return;
-    }
-    if (dirty_) render();
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.drawImage(target, image_);
 }
 
 } // namespace pi_control::screensaver

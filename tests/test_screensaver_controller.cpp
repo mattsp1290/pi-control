@@ -55,6 +55,7 @@ public:
     int keyPresses = 0;
     int mousePresses = 0;
     int touchBegins = 0;
+    int mouseMoves = 0;
 
 protected:
     bool eventFilter(QObject*, QEvent* event) override {
@@ -62,6 +63,7 @@ protected:
         case QEvent::KeyPress: ++keyPresses; break;
         case QEvent::MouseButtonPress: ++mousePresses; break;
         case QEvent::TouchBegin: ++touchBegins; break;
+        case QEvent::MouseMove: ++mouseMoves; break;
         default: break;
         }
         return false;
@@ -121,6 +123,9 @@ private:
     void waitUntilActive() {
         QTRY_VERIFY_WITH_TIMEOUT(controller_->isActive(), 3000);
     }
+    void waitUntilDraining() {
+        QTRY_VERIFY_WITH_TIMEOUT(controller_->state() == State::Draining, 5000);
+    }
     void waitUntilWatching() {
         QTRY_VERIFY_WITH_TIMEOUT(controller_->state() == State::Watching, 5000);
     }
@@ -166,7 +171,7 @@ private slots:
         touchRelease(); // Swallowed: the button stays down.
         touchPress();   // Wake, held past maxWakeGuard.
         QTest::qWait(800);
-        QCOMPARE(controller_->state(), State::Watching);
+        QCOMPARE(controller_->state(), State::Draining);
         touchRelease();
         QCOMPARE(clicked_->count(), 0);
         touchPress();
@@ -184,11 +189,30 @@ private slots:
         QTest::mouseRelease(window(), Qt::LeftButton, {}, buttonCenter());
         QTest::mousePress(window(), Qt::LeftButton, {}, buttonCenter());
         QTest::qWait(800);
-        QCOMPARE(controller_->state(), State::Watching);
+        QCOMPARE(controller_->state(), State::Draining);
         QTest::mouseRelease(window(), Qt::LeftButton, {}, buttonCenter());
         QCOMPARE(clicked_->count(), 0);
         click();
         QCOMPARE(clicked_->count(), 1);
+    }
+
+    void drainingEndsWhenTheScreensaverActivates() {
+        auto config = defaultConfig();
+        config.maxWakeGuard = 500ms;
+        build(std::move(config));
+        button_->setMouseTracking(true);
+        waitUntilActive();
+        QTest::mousePress(window(), Qt::LeftButton, {}, buttonCenter());
+        waitUntilDraining();
+        waitUntilActive(); // Re-activates while the drained press is still held.
+        QTest::mouseRelease(window(), Qt::LeftButton, {}, buttonCenter());
+        click();
+        waitUntilWatching();
+        const int before = counter_->mouseMoves;
+        QTest::mouseMove(window(), buttonCenter() + QPoint(1, 0));
+        QTest::mouseMove(window(), buttonCenter() + QPoint(2, 0));
+        QCOMPARE(counter_->mouseMoves - before, 2);
+        QCOMPARE(clicked_->count(), 0);
     }
 
     void shortcutWhileActiveDoesNotFire() {
@@ -308,10 +332,11 @@ private slots:
         build(std::move(config));
         waitUntilActive();
         touchPress();
-        waitUntilWatching();
+        waitUntilDraining(); // The lost TouchEnd keeps draining; a new tap ends it.
         touchPress();
         touchRelease();
         QCOMPARE(clicked_->count(), 1);
+        QCOMPARE(controller_->state(), State::Watching);
     }
 
     void mismatchedKeyReleaseDoesNotBlockInput() {
@@ -322,7 +347,7 @@ private slots:
         QTest::keyPress(window(), Qt::Key_Space);
         QTest::keyRelease(window(), Qt::Key_A);
         QCOMPARE(controller_->state(), State::WakeGuard);
-        waitUntilWatching();
+        waitUntilDraining();
         click();
         QCOMPARE(clicked_->count(), 1);
     }

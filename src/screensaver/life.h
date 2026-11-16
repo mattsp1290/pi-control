@@ -1,8 +1,6 @@
 #pragma once
 
-#include "screensaver/screensaver.h"
-
-#include <QImage>
+#include "screensaver/raster_screensaver.h"
 
 #include <array>
 #include <cstdint>
@@ -52,24 +50,22 @@ private:
     int generations_ = 0;
 };
 
-class LifeScreensaver final : public Screensaver {
+class LifeScreensaver final : public RasterScreensaver {
 public:
+    LifeScreensaver();
     void start(QSize size, quint32 seed) override;
     void resize(QSize size) override;
     void advance(std::chrono::milliseconds dt) override;
-    void paint(QPainter& painter, const QRect& target) override;
 
 private:
     void reseed();
-    void render();
+    void render(QImage& frame) override;
 
     LifeGrid grid_;
     LifeStagnationDetector detector_;
     quint32 seed_ = 0;
     quint32 resets_ = 0;
-    std::chrono::milliseconds pending_{0};
-    QImage image_;
-    bool dirty_ = true;
+    FixedStep<std::chrono::milliseconds> clock_;
     std::array<QRgb, 256> palette_{};
 };
 

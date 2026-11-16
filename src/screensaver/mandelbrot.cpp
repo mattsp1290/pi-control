@@ -22,11 +22,6 @@ constexpr int kMaxIterations = 2500;
 constexpr double kIterationsPerOctave = 60.0;
 constexpr double kIterationsPerColorCycle = 64.0;
 
-QRgb mix(QColor a, QColor b, double t) {
-    return qRgb(int(a.red() + (b.red() - a.red()) * t), int(a.green() + (b.green() - a.green()) * t),
-                int(a.blue() + (b.blue() - a.blue()) * t));
-}
-
 } // namespace
 
 const std::vector<ZoomTarget>& mandelbrotZoomTargets() {
@@ -89,7 +84,7 @@ MandelbrotPalette makeMandelbrotPalette() {
     for (std::size_t i = 0; i < palette.size(); ++i) {
         const double position = double(i) / double(palette.size()) * segments;
         const int segment = std::min(int(position), segments - 1);
-        palette[i] = mix(stops[segment], stops[segment + 1], position - segment);
+        palette[i] = lerpRgb(stops[segment], stops[segment + 1], position - segment);
     }
     return palette;
 }
@@ -165,6 +160,8 @@ double MandelbrotZoom::brightness() const {
     return fade_ < 0.0 ? 1.0 : std::max(0.0, 1.0 - fade_ / kFadeSeconds);
 }
 
+MandelbrotScreensaver::MandelbrotScreensaver() : RasterScreensaver(qRgb(0, 0, 0), true) {}
+
 void MandelbrotScreensaver::start(QSize size, quint32 seed) {
     palette_ = makeMandelbrotPalette();
     zoom_.start(seed);
@@ -172,30 +169,21 @@ void MandelbrotScreensaver::start(QSize size, quint32 seed) {
 }
 
 void MandelbrotScreensaver::resize(QSize size) {
-    const QSize internal = scaledToBudget(size, kMaxPixels);
-    image_ = internal.isEmpty() ? QImage() : QImage(internal, QImage::Format_RGB32);
-    dirty_ = true;
+    setFrameSize(scaledToBudget(size, kMaxPixels));
 }
 
 void MandelbrotScreensaver::advance(std::chrono::milliseconds dt) {
     zoom_.advance(dt.count() / 1000.0);
-    dirty_ = true;
+    invalidate();
 }
 
-void MandelbrotScreensaver::paint(QPainter& painter, const QRect& target) {
-    if (target.isEmpty()) return;
-    if (image_.isNull()) {
-        painter.fillRect(target, Qt::black);
-        return;
-    }
-    if (dirty_) {
-        const double scale = zoom_.scale();
-        renderMandelbrot(image_, zoom_.target().cx, zoom_.target().cy, scale, mandelbrotIterationsForScale(scale),
-                         palette_, 0.15 * std::log(MandelbrotZoom::kStartScale / scale));
-        dirty_ = false;
-    }
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.drawImage(target, image_);
+void MandelbrotScreensaver::render(QImage& frame) {
+    const double scale = zoom_.scale();
+    renderMandelbrot(frame, zoom_.target().cx, zoom_.target().cy, scale, mandelbrotIterationsForScale(scale), palette_,
+                     0.15 * std::log(MandelbrotZoom::kStartScale / scale));
+}
+
+void MandelbrotScreensaver::paintOverlay(QPainter& painter, const QRect& target) {
     const double darkness = 1.0 - zoom_.brightness();
     if (darkness > 0.0) painter.fillRect(target, QColor(0, 0, 0, int(darkness * 255)));
 }

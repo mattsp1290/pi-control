@@ -18,12 +18,6 @@ constexpr std::chrono::milliseconds kGenerationInterval{100};
 constexpr int kMaxGenerationsPerAdvance = 5;
 constexpr QRgb kDeadColor = 0xff101820;
 
-QRgb blend(QColor from, QColor to, double t) {
-    return qRgb(int(from.red() + (to.red() - from.red()) * t),
-                int(from.green() + (to.green() - from.green()) * t),
-                int(from.blue() + (to.blue() - from.blue()) * t));
-}
-
 } // namespace
 
 void LifeGrid::resize(int width, int height) {
@@ -121,13 +115,16 @@ bool LifeStagnationDetector::observe(quint64 hash, int population) {
     return false;
 }
 
+LifeScreensaver::LifeScreensaver()
+    : RasterScreensaver(kDeadColor, false), clock_(kGenerationInterval, kMaxGenerationsPerAdvance) {}
+
 void LifeScreensaver::start(QSize size, quint32 seed) {
     seed_ = seed;
     resets_ = 0;
     const QColor young(0x5f, 0xf4, 0xff);
     const QColor old(0x0e, 0x7c, 0x86);
     for (int age = 0; age < 256; ++age) {
-        palette_[age] = blend(young, old, std::min(age, 32) / 32.0);
+        palette_[age] = lerpRgb(young, old, std::min(age, 32) / 32.0);
     }
     resize(size);
 }
@@ -141,8 +138,8 @@ void LifeScreensaver::resize(QSize size) {
         rows = std::clamp(size.height() / edge, 1, kMaxRows);
     }
     grid_.resize(columns, rows);
-    image_ = columns > 0 ? QImage(columns, rows, QImage::Format_RGB32) : QImage();
-    pending_ = {};
+    setFrameSize({columns, rows});
+    clock_.reset();
     reseed();
 }
 
@@ -150,39 +147,24 @@ void LifeScreensaver::reseed() {
     grid_.randomize(seed_ ^ (resets_ * 0x9e3779b9u), kDensity);
     ++resets_;
     detector_.reset();
-    dirty_ = true;
+    invalidate();
 }
 
 void LifeScreensaver::advance(std::chrono::milliseconds dt) {
-    pending_ += dt;
-    for (int i = 0; i < kMaxGenerationsPerAdvance && pending_ >= kGenerationInterval; ++i) {
-        pending_ -= kGenerationInterval;
+    for (int steps = clock_.take(dt); steps > 0; --steps) {
         grid_.step();
-        dirty_ = true;
+        invalidate();
         if (detector_.observe(grid_.hash(), grid_.population())) reseed();
     }
-    pending_ = std::min(pending_, kGenerationInterval);
 }
 
-void LifeScreensaver::render() {
+void LifeScreensaver::render(QImage& frame) {
     for (int y = 0; y < grid_.height(); ++y) {
-        auto* line = reinterpret_cast<QRgb*>(image_.scanLine(y));
+        auto* line = reinterpret_cast<QRgb*>(frame.scanLine(y));
         for (int x = 0; x < grid_.width(); ++x) {
             line[x] = grid_.alive(x, y) ? palette_[grid_.age(x, y)] : kDeadColor;
         }
     }
-    dirty_ = false;
-}
-
-void LifeScreensaver::paint(QPainter& painter, const QRect& target) {
-    if (target.isEmpty()) return;
-    if (image_.isNull()) {
-        painter.fillRect(target, QColor::fromRgb(kDeadColor));
-        return;
-    }
-    if (dirty_) render();
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-    painter.drawImage(target, image_);
 }
 
 } // namespace pi_control::screensaver

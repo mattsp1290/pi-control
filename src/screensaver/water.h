@@ -1,6 +1,6 @@
 #pragma once
 
-#include "screensaver/screensaver.h"
+#include "screensaver/raster_screensaver.h"
 
 #include <QImage>
 
@@ -31,24 +31,24 @@ private:
 };
 
 // Rain falling on water seen from above: ripples refract a pool floor.
-class WaterScreensaver final : public Screensaver {
+class WaterScreensaver final : public RasterScreensaver {
 public:
+    WaterScreensaver();
     void start(QSize size, quint32 seed) override;
     void resize(QSize size) override;
     void advance(std::chrono::milliseconds dt) override;
-    void paint(QPainter& painter, const QRect& target) override;
 
 private:
+    using Seconds = std::chrono::duration<double>;
+
     void scheduleNextDrop();
-    void render();
+    void render(QImage& frame) override;
 
     WaveField field_;
     std::mt19937 random_;
     QImage floor_;
-    QImage image_;
-    double pendingSeconds_ = 0.0;
+    FixedStep<Seconds> clock_;
     double untilDrop_ = 0.0;
-    bool dirty_ = true;
 };
 
 } // namespace pi_control::screensaver
