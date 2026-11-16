@@ -1,4 +1,5 @@
 #include "screensaver/life.h"
+#include "screensaver/mandelbrot.h"
 #include "screensaver/registry.h"
 
 #include <QImage>
@@ -141,6 +142,78 @@ private slots:
         detector.reset();
         for (int i = 1; i < LifeStagnationDetector::kMaxGenerations; ++i) QVERIFY(!detector.observe(quint64(i), 10));
         QVERIFY(detector.observe(quint64(LifeStagnationDetector::kMaxGenerations), 10));
+    }
+
+    void mandelbrotEscapeValues() {
+        QCOMPARE(mandelbrotEscapeValue(0, 0, 100), -1.0);
+        QCOMPARE(mandelbrotEscapeValue(-1, 0, 100), -1.0);
+        const double outside = mandelbrotEscapeValue(2, 2, 100);
+        QVERIFY(outside >= 0.0 && outside < 2.0);
+    }
+
+    void mandelbrotEarlyOutsMatchReferenceLoop() {
+        const auto reference = [](double x, double y, int maxIterations) {
+            double zx = 0, zy = 0;
+            for (int n = 0; n < maxIterations; ++n) {
+                const double magnitude2 = zx * zx + zy * zy;
+                if (magnitude2 > 65536.0) return std::max(0.0, n + 1.0 - std::log2(0.5 * std::log(magnitude2)));
+                const double nextX = zx * zx - zy * zy + x;
+                zy = 2 * zx * zy + y;
+                zx = nextX;
+            }
+            return -1.0;
+        };
+        for (const auto& [x, y] : {std::pair{-0.75, 0.1}, {0.3, 0.5}, {-1.25, 0.05}, {-0.1, 0.65}, {0.26, 0.0}}) {
+            QVERIFY2(std::abs(mandelbrotEscapeValue(x, y, 2500) - reference(x, y, 2500)) < 1e-9,
+                     qPrintable(QString("%1,%2").arg(x).arg(y)));
+        }
+    }
+
+    void mandelbrotZoomShrinksThenMovesToNextTarget() {
+        MandelbrotZoom zoom;
+        zoom.start(3);
+        const ZoomTarget first = zoom.target();
+        double previous = zoom.scale();
+        int frames = 0;
+        while (zoom.cycles() == 0 && frames < 100000) {
+            zoom.advance(0.033);
+            ++frames;
+            if (zoom.cycles() == 0) {
+                QVERIFY(zoom.scale() <= previous);
+                QVERIFY(zoom.scale() >= first.floorScale);
+            }
+            previous = zoom.scale();
+        }
+        QCOMPARE(zoom.cycles(), 1);
+        QCOMPARE(zoom.scale(), MandelbrotZoom::kStartScale);
+        QVERIFY(zoom.target().cx != first.cx || zoom.target().cy != first.cy);
+        QCOMPARE(zoom.brightness(), 1.0);
+    }
+
+    void everyZoomTargetHasDetailAtFloor() {
+        const auto palette = makeMandelbrotPalette();
+        for (const auto& target : mandelbrotZoomTargets()) {
+            QImage image(160, 90, QImage::Format_RGB32);
+            renderMandelbrot(image, target.cx, target.cy, target.floorScale,
+                             mandelbrotIterationsForScale(target.floorScale), palette, 0.0);
+            QSet<QRgb> colors;
+            int escaped = 0;
+            for (int y = 0; y < image.height(); ++y) {
+                const auto* line = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+                for (int x = 0; x < image.width(); ++x) {
+                    colors.insert(line[x]);
+                    if (qRgb(0, 0, 0) != line[x]) ++escaped;
+                }
+            }
+            const double fraction = double(escaped) / (image.width() * image.height());
+            const QString label = QString("(%1, %2) escaped %3 colors %4")
+                                      .arg(target.cx, 0, 'g', 17).arg(target.cy, 0, 'g', 17)
+                                      .arg(fraction).arg(colors.size());
+            // Not mostly interior, and not a flat smooth-colour field: a view
+            // zoomed past its coordinate precision collapses to a few colours.
+            QVERIFY2(fraction >= 0.05, qPrintable(label));
+            QVERIFY2(colors.size() >= 64, qPrintable(label));
+        }
     }
 
     void everyScreensaverAcceptsZeroAndOddSizes() {

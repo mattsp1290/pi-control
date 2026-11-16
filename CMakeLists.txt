@@ -9,6 +9,7 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets DBus Concurrent)
 set(CMAKE_AUTOMOC ON)
 add_library(pi_control_screensaver STATIC
   src/screensaver/life.cpp
+  src/screensaver/mandelbrot.cpp
   src/screensaver/registry.cpp
   src/screensaver/screensaver_controller.cpp
   src/screensaver/screensaver_view.cpp)
@@ -28,6 +29,9 @@ if(BUILD_TESTING)
   target_compile_options(screensaver-tests PRIVATE -Wall -Wextra -Wpedantic)
   add_test(NAME screensaver-unit COMMAND screensaver-tests)
   set_tests_properties(screensaver-unit PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+  add_executable(screensaver-bench tests/bench_screensavers.cpp)
+  target_link_libraries(screensaver-bench PRIVATE pi_control_screensaver)
+  target_compile_options(screensaver-bench PRIVATE -Wall -Wextra -Wpedantic)
   add_executable(screensaver-controller-tests tests/test_screensaver_controller.cpp)
   target_link_libraries(screensaver-controller-tests PRIVATE pi_control_screensaver Qt6::Test)
   target_compile_options(screensaver-controller-tests PRIVATE -Wall -Wextra -Wpedantic)
