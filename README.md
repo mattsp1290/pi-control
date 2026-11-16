@@ -26,6 +26,20 @@ for tests; build natively on the Pi for deployment. `--smoke-test` exercises
 the actual button using dry-run logic and exits. Normal launch really powers
 off the machine when clicked. Do not use normal launch for desktop testing.
 
+## Screensaver
+
+After 15 seconds without input, a screensaver covers the shutdown screen:
+Conway's Game of Life, a Mandelbrot zoom, or rain on water, chosen at random
+each time. Any touch, click, mouse movement or key press dismisses it without
+pressing the shutdown button. To preview one on a desktop:
+
+```sh
+./build/pi-control --dry-run --screensaver mandelbrot
+```
+
+Ids are `life`, `mandelbrot` and `water`. See [Screensavers](docs/screensavers.md)
+for the architecture and how to add one.
+
 ## Install, update, and start on boot
 
 Use **64-bit Raspberry Pi OS Lite Bookworm or newer** with systemd and no
@@ -94,7 +108,7 @@ SSH sessions exist, but never inhibitor bypass. No sudo password or root GUI
 is needed. `NoNewPrivileges` does not prevent the system-bus authorization
 performed by logind/polkit.
 
-Inspect `journalctl -u pi-control -b` if startup or shutdown fails. After fixing
+Service output goes to the journal. Inspect `journalctl -u pi-control -b` if startup or shutdown fails. After fixing
 a problem that exhausted the startup retry limit, clear the failure and restart:
 
 ```sh
