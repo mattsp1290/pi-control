@@ -12,7 +12,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y git ca-certificates build-essential cmake ninja-build qt6-base-dev qt6-qpa-plugins dpkg-dev python3
+          apt-get install -y git ca-certificates build-essential cmake ninja-build qt6-base-dev qt6-qpa-plugins dpkg-dev python3 file
       - uses: actions/checkout@v4
       - name: Build and test on the oldest supported OS
         run: |

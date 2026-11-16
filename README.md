@@ -124,7 +124,7 @@ python3 -m unittest discover -s distribution/tests -v
 The release workflow builds and tests natively on ARM64 in Debian Bookworm,
 then packages the binary, systemd unit, and polkit rule. It derives runtime
 library dependencies with `dpkg-shlibdeps`. To build a local package (requires
-`dpkg-dev` in addition to the build dependencies):
+`dpkg-dev` and `file` in addition to the build dependencies):
 
 ```sh
 cmake -S . -B build-package -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DPI_CONTROL_PACKAGE=ON

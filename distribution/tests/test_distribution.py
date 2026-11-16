@@ -1,5 +1,6 @@
 """Exercise installer boundaries without apt, root access, or a running service."""
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -26,10 +27,14 @@ elif tool == "curl":
     source = "manifest.json" if url.endswith(".json") else "pi-control_0.1.0_arm64.deb"
     shutil.copyfile(root / source, args[args.index("-o") + 1])
 elif tool == "getent":
+    if os.environ.get("TEST_FRESH_SYSTEM") and not (root / ("created-" + args[-1])).exists():
+        sys.exit(2)
     if args[:2] == ["passwd", "pi-control"]:
         print("pi-control:x:123:123::/nonexistent:" + os.environ.get("TEST_SHELL", "/usr/sbin/nologin"))
     else:
         print(args[-1] + ":x:44:")
+elif tool in ("adduser", "addgroup"):
+    (root / ("created-" + args[-1])).touch()
 elif tool == "systemctl" and "is-active" in args:
     sys.exit(int(os.environ.get("TEST_INACTIVE", "0")))
 elif tool == "apt-get":
@@ -92,6 +97,16 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any("--allow-downgrades" in c for c in self.calls()))
 
+    def test_concurrent_installer_rejected_then_succeeds_after_unlock(self):
+        with (self.root / "install.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_script("distribution/install.sh")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("another pi-control install is running", result.stderr)
+            self.assertFalse(any(c[0] in ("curl", "apt-get") for c in self.calls()))
+        result = self.run_script("distribution/install.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_invalid_version_rejected_before_download(self):
         result = self.run_script("distribution/install.sh", PI_CONTROL_INSTALL_VERSION="../../bad")
         self.assertNotEqual(result.returncode, 0)
@@ -138,6 +153,19 @@ class DistributionTests(unittest.TestCase):
         result = self.run_script("distribution/debian/preinst", "install", TEST_SHELL="/bin/bash")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(any(c[0] == "systemctl" for c in self.calls()))
+
+    def test_fresh_install_creates_account_and_groups_once_before_start(self):
+        for path, arg in (("preinst", "install"), ("postinst", "configure"), ("postinst", "configure")):
+            result = self.run_script("distribution/debian/" + path, arg, TEST_FRESH_SYSTEM="1")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        creates = [c for c in calls if c[0] in ("adduser", "addgroup")]
+        self.assertEqual(creates, [
+            ["adduser", "--system", "--group", "--no-create-home", "--home", "/nonexistent", "pi-control"],
+            ["addgroup", "--system", "video"], ["addgroup", "--system", "render"],
+            ["addgroup", "--system", "input"]])
+        first_restart = calls.index(["systemctl", "restart", "pi-control.service"])
+        self.assertTrue(all(calls.index(c) < first_restart for c in creates))
 
     def test_remove_stops_service_but_upgrade_keeps_it_running(self):
         result = self.run_script("distribution/debian/prerm", "upgrade")
