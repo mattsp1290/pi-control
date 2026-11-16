@@ -8,6 +8,7 @@ CPMAddPackage("gh:fmtlib/fmt#11.1.4")
 find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets DBus Concurrent)
 set(CMAKE_AUTOMOC ON)
 add_library(pi_control_screensaver STATIC
+  src/screensaver/life.cpp
   src/screensaver/registry.cpp)
 target_include_directories(pi_control_screensaver PUBLIC src)
 target_link_libraries(pi_control_screensaver PUBLIC Qt6::Widgets Qt6::Concurrent fmt::fmt)

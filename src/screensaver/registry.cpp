@@ -1,9 +1,13 @@
 #include "screensaver/registry.h"
 
+#include "screensaver/life.h"
+
 namespace pi_control::screensaver {
 
 const std::vector<ScreensaverDescriptor>& builtinScreensavers() {
-    static const std::vector<ScreensaverDescriptor> screensavers{};
+    static const std::vector<ScreensaverDescriptor> screensavers{
+        {"life", "Conway's Game of Life", [] { return std::make_unique<LifeScreensaver>(); }},
+    };
     return screensavers;
 }
 

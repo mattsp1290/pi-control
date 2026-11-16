@@ -1,3 +1,4 @@
+#include "screensaver/life.h"
 #include "screensaver/registry.h"
 
 #include <QImage>
@@ -80,6 +81,66 @@ private slots:
             const QImage b = renderFrames(*second, QSize(200, 120), 42, 45);
             QVERIFY2(a == b, qPrintable(descriptor.id));
         }
+    }
+
+    void lifeBlinkerHasPeriodTwo() {
+        LifeGrid grid;
+        grid.resize(5, 5);
+        for (int x = 1; x <= 3; ++x) grid.set(x, 2, true);
+        const quint64 start = grid.hash();
+        grid.step();
+        QVERIFY(grid.alive(2, 1) && grid.alive(2, 2) && grid.alive(2, 3));
+        QVERIFY(!grid.alive(1, 2) && !grid.alive(3, 2));
+        QVERIFY(grid.hash() != start);
+        grid.step();
+        QCOMPARE(grid.hash(), start);
+        QCOMPARE(grid.population(), 3);
+    }
+
+    void lifeBlockIsStillAndAges() {
+        LifeGrid grid;
+        grid.resize(6, 6);
+        for (const auto& [x, y] : {std::pair{2, 2}, {3, 2}, {2, 3}, {3, 3}}) grid.set(x, y, true);
+        const quint64 start = grid.hash();
+        grid.step();
+        grid.step();
+        QCOMPARE(grid.hash(), start);
+        QCOMPARE(grid.age(2, 2), std::uint8_t(2));
+    }
+
+    void lifeGliderWrapsAcrossTheEdge() {
+        LifeGrid grid;
+        grid.resize(8, 8);
+        // Glider heading down-right, placed against the right/bottom edges.
+        const std::pair<int, int> glider[] = {{6, 5}, {7, 6}, {5, 7}, {6, 7}, {7, 7}};
+        for (const auto& [x, y] : glider) grid.set(x, y, true);
+        for (int i = 0; i < 4; ++i) grid.step();
+        QCOMPARE(grid.population(), 5);
+        for (const auto& [x, y] : glider) QVERIFY(grid.alive((x + 1) % 8, (y + 1) % 8));
+    }
+
+    void lifeStagnationDetectedWithin31Generations() {
+        LifeGrid grid;
+        grid.resize(6, 6);
+        for (const auto& [x, y] : {std::pair{2, 2}, {3, 2}, {2, 3}, {3, 3}}) grid.set(x, y, true);
+        LifeStagnationDetector detector;
+        int generations = 0;
+        bool stalled = false;
+        while (!stalled && generations < 31) {
+            grid.step();
+            ++generations;
+            stalled = detector.observe(grid.hash(), grid.population());
+        }
+        QVERIFY(stalled);
+        QVERIFY(generations <= 31);
+    }
+
+    void lifeStagnationDetectsEmptyAndOldRuns() {
+        LifeStagnationDetector detector;
+        QVERIFY(detector.observe(1, 0));
+        detector.reset();
+        for (int i = 1; i < LifeStagnationDetector::kMaxGenerations; ++i) QVERIFY(!detector.observe(quint64(i), 10));
+        QVERIFY(detector.observe(quint64(LifeStagnationDetector::kMaxGenerations), 10));
     }
 
     void everyScreensaverAcceptsZeroAndOddSizes() {
