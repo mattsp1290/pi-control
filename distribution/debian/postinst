@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+if [ "$1" = configure ]; then
+  if ! getent passwd pi-control >/dev/null; then
+    adduser --system --group --no-create-home --home /nonexistent pi-control
+  fi
+  for group in video render input; do
+    getent group "$group" >/dev/null || addgroup --system "$group"
+  done
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable pi-control.service
+    systemctl reset-failed pi-control.service
+    systemctl restart pi-control.service
+  fi
+fi

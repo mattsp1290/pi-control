@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+# Validate before unpacking the shutdown authorization rule.
+case $1 in
+  install|upgrade)
+    if getent passwd pi-control >/dev/null; then
+      account_uid=$(id -u pi-control)
+      account_shell=$(getent passwd pi-control | cut -d: -f7)
+      case $account_shell in
+        /usr/sbin/nologin|/sbin/nologin|/bin/false) ;;
+        *) echo 'pi-control account must have a nologin shell' >&2; exit 1 ;;
+      esac
+      [ "$account_uid" -gt 0 ] && [ "$account_uid" -lt 1000 ] || {
+        echo 'pi-control account must be a dedicated system account (UID 1-999)' >&2
+        exit 1
+      }
+    fi
+    ;;
+esac
