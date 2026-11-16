@@ -38,7 +38,7 @@ if(PI_CONTROL_PACKAGE)
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Fullscreen Raspberry Pi shutdown appliance")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins, libegl1, libgles2, libgbm1, libinput10, policykit-1, systemd, adduser")
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins, libegl1, libgles2, libgbm1, libinput10, polkitd, systemd, adduser")
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
     "${CMAKE_CURRENT_SOURCE_DIR}/distribution/debian/preinst"
     "${CMAKE_CURRENT_SOURCE_DIR}/distribution/debian/postinst"

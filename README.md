@@ -12,7 +12,7 @@ On the Pi (or Debian desktop for development):
 
 ```sh
 sudo apt update
-sudo apt install git build-essential cmake ninja-build qt6-base-dev qt6-qpa-plugins libegl1 libgles2 libgbm1 libinput10 libqt6gui6 policykit-1
+sudo apt install git build-essential cmake ninja-build qt6-base-dev qt6-qpa-plugins libegl1 libgles2 libgbm1 libinput10 libqt6gui6 polkitd
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
