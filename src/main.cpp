@@ -11,6 +11,12 @@
 #include <QWidget>
 #include <fmt/base.h>
 
+#include "screensaver/registry.h"
+#include "screensaver/screensaver_controller.h"
+#include "screensaver/screensaver_view.h"
+
+using namespace pi_control::screensaver;
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("pi-control");
@@ -20,7 +26,23 @@ int main(int argc, char** argv) {
     parser.addOption({"dry-run", "Simulate shutdown without powering off."});
     parser.addOption({"smoke-test", "Exercise the real button safely and exit."});
     parser.addOption({"smoke-test-failure", "Safely exercise a disconnected shutdown bus and exit."});
+    QStringList screensaverIds;
+    for (const auto& descriptor : builtinScreensavers()) screensaverIds << descriptor.id;
+    const QCommandLineOption screensaverOption(
+        "screensaver", "Use only this screensaver (still starts after 15 s idle): " + screensaverIds.join(", ") + ".",
+        "id");
+    parser.addOption(screensaverOption);
     parser.process(app);
+    ScreensaverControllerConfig saverConfig;
+    if (parser.isSet(screensaverOption)) {
+        const QString id = parser.value(screensaverOption);
+        const auto* descriptor = findScreensaver(id);
+        if (!descriptor) {
+            fmt::print(stderr, "Unknown screensaver: {}\n", id.toStdString());
+            return 2;
+        }
+        saverConfig.candidates = {descriptor};
+    }
     const bool failureTest = parser.isSet("smoke-test-failure");
     const bool smoke = parser.isSet("smoke-test") || failureTest;
     const bool dryRun = smoke || parser.isSet("dry-run");
@@ -47,8 +69,11 @@ int main(int argc, char** argv) {
     layout->addSpacing(24);
     layout->addWidget(button);
     layout->addStretch();
+    auto* saverView = new ScreensaverView(&screen);
+    ScreensaverController saverController(*saverView, std::move(saverConfig));
     bool simulated = false;
     QObject::connect(button, &QPushButton::clicked, &screen, [&] {
+        saverController.setInhibited(true); // No screensaver while a shutdown is pending.
         button->setEnabled(false);
         if (dryRun && !failureTest) {
             simulated = true;
@@ -65,12 +90,13 @@ int main(int argc, char** argv) {
         const auto bus = failureTest ? QDBusConnection(QStringLiteral("pi-control-test-disconnected"))
                                      : QDBusConnection::systemBus();
         auto* watcher = new QDBusPendingCallWatcher(bus.asyncCall(message, 10000), &screen);
-        const auto finished = [=, &app](QDBusPendingCallWatcher* call) {
+        const auto finished = [=, &app, &saverController](QDBusPendingCallWatcher* call) {
             const QDBusPendingReply<> reply = *call;
             if (reply.isError()) {
                 fmt::print(stderr, "Shutdown failed: {}\n", reply.error().message().toStdString());
                 status->setText("Shutdown failed. Check the service journal and try again.");
                 button->setEnabled(true);
+                saverController.setInhibited(false);
             }
             if (failureTest) {
                 app.exit(reply.isError() && button->isEnabled()
