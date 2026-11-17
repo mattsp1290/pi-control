@@ -43,8 +43,8 @@ class, one list entry, one CMake line and one test.
    QVERIFY(weather);
    ```
 
-   Then update the expected titles in `tests/test_app_shell.cpp` and in the
-   smoke test check (`hasExpectedTabs` in `src/main.cpp`).
+   Then update the expected titles in `tests/test_app_shell.cpp`. The smoke
+   test reads the titles from `tabs()`, so it needs no change.
 
 The touchscreen is 800×480 and the tab bar takes 64 px, so a page has about
 416 px of height. Keep touch targets at least 56 px tall.

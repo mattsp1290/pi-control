@@ -31,7 +31,7 @@ QString formatGigabytes(quint64 bytes) {
 
 QString formatWifiStatus(const wifi::WifiStatus& status) {
     switch (status.state) {
-    case State::Connected: return "Wi‑Fi  " + status.ssid;
+    case State::Connected: return "Wi‑Fi  " + (status.ssid.isEmpty() ? QString("Connected") : status.ssid);
     case State::Connecting: return "Wi‑Fi  Connecting to " + status.ssid + "…";
     case State::Disconnected: return "Wi‑Fi  Not connected";
     case State::RadioOff: return "Wi‑Fi  Off";

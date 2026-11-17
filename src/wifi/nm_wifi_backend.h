@@ -55,6 +55,8 @@ private slots:
     void onAccessPointRemoved(const QDBusObjectPath& path);
     void onConnectionAdded(const QDBusObjectPath& path);
     void onConnectionRemoved(const QDBusObjectPath& path);
+    void onDeviceAdded(const QDBusObjectPath& path);
+    void onDeviceRemoved(const QDBusObjectPath& path);
 
 private:
     using ReplyHandler = std::function<void(const QDBusMessage&)>;
@@ -76,6 +78,7 @@ private:
     void findWifiDevice(QList<QDBusObjectPath> devices);
     void useDevice(const QString& path);
     void becomeUnavailable(const QString& detail);
+    void clearDevice();
     void applyDeviceProperties(const QVariantMap& properties);
     void setActiveAccessPoint(const QString& path);
     void setActiveConnection(const QString& path);
@@ -89,7 +92,6 @@ private:
 
     void startAttempt(bool createdProfile);
     void addAndActivate(const WifiNetwork& network, const QString& password);
-    void deleteThenAdd(std::vector<QString> profiles, const WifiNetwork& network, const QString& password);
     void apply(const ConnectActions& actions);
 
     QDBusConnection bus_;
@@ -110,11 +112,15 @@ private:
 
     bool scanning_ = false;
     qint64 lastScan_ = -1; // NetworkManager's LastScan (CLOCK_BOOTTIME ms).
+    qint64 scanBaseline_ = -1; // lastScan_ when the scan was requested.
     std::optional<QDateTime> lastScanTime_;
     QTimer scanQuietTimer_;
 
     std::optional<ConnectAttempt> attempt_;
     QByteArray attemptSsid_;
+    // Saved profiles a new password replaces; deleted once the new one works.
+    std::vector<QString> supersededProfiles_;
+    std::vector<QByteArray> pendingForgets_;
     QString subscribedActivePath_;
     QTimer attemptTimer_;
 };

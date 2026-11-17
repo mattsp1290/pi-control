@@ -12,7 +12,9 @@
 
 #include <time.h>
 
+#include <algorithm>
 #include <memory>
+#include <utility>
 
 namespace pi_control::wifi {
 
@@ -143,6 +145,8 @@ void NmWifiBackend::initialize() {
             }
             subscribe(nm::kPath, nm::kProperties, "PropertiesChanged",
                       SLOT(onManagerPropertiesChanged(QString, QVariantMap, QStringList)));
+            subscribe(nm::kPath, nm::kManager, "DeviceAdded", SLOT(onDeviceAdded(QDBusObjectPath)));
+            subscribe(nm::kPath, nm::kManager, "DeviceRemoved", SLOT(onDeviceRemoved(QDBusObjectPath)));
             subscribe(nm::kSettingsPath, nm::kSettings, "NewConnection", SLOT(onConnectionAdded(QDBusObjectPath)));
             subscribe(nm::kSettingsPath, nm::kSettings, "ConnectionRemoved",
                       SLOT(onConnectionRemoved(QDBusObjectPath)));
@@ -163,8 +167,12 @@ void NmWifiBackend::initialize() {
 }
 
 void NmWifiBackend::findWifiDevice(QList<QDBusObjectPath> devices) {
+    if (!devicePath_.isEmpty()) return;
     if (devices.isEmpty()) {
-        becomeUnavailable("No Wi‑Fi adapter");
+        // Keep the manager subscriptions: DeviceAdded brings a late adapter in.
+        available_ = false;
+        unavailableDetail_ = "No Wi‑Fi adapter";
+        emit statusChanged();
         return;
     }
     const QString path = devices.takeFirst().path();
@@ -197,27 +205,45 @@ void NmWifiBackend::useDevice(const QString& path) {
     });
 }
 
-void NmWifiBackend::becomeUnavailable(const QString& detail) {
-    ++generation_;
-    unsubscribeAll();
-    if (attempt_) apply(attempt_->serviceVanished());
-    if (scanning_) {
-        scanning_ = false;
-        scanQuietTimer_.stop();
-        emit scanFinished(WifiError::Unavailable);
-    }
-    available_ = false;
-    unavailableDetail_ = detail;
+void NmWifiBackend::clearDevice() {
     devicePath_.clear();
     deviceState_ = 0;
     activeAccessPointPath_.clear();
     activeConnectionPath_.clear();
     activeProfilePath_.clear();
     accessPoints_.clear();
+}
+
+void NmWifiBackend::becomeUnavailable(const QString& detail) {
+    ++generation_; // Replies still in flight are dropped.
+    unsubscribeAll();
+    // Clear first, so a listener reacting to the signals below cannot start
+    // work against the vanished service.
+    available_ = false;
+    unavailableDetail_ = detail;
+    clearDevice();
     profiles_.clear();
+    supersededProfiles_.clear();
     fmt::print(stderr, "Wi‑Fi: unavailable: {}\n", detail.toStdString());
+    if (attempt_) apply(attempt_->serviceVanished());
+    if (scanning_) {
+        scanning_ = false;
+        scanQuietTimer_.stop();
+        emit scanFinished(WifiError::Unavailable);
+    }
+    for (const QByteArray& ssid : std::exchange(pendingForgets_, {})) emit forgetFinished(ssid, WifiError::Unavailable);
     emit statusChanged();
     emit networksChanged();
+}
+
+void NmWifiBackend::onDeviceAdded(const QDBusObjectPath& path) {
+    if (devicePath_.isEmpty()) findWifiDevice({path});
+}
+
+void NmWifiBackend::onDeviceRemoved(const QDBusObjectPath& path) {
+    if (path.path() != devicePath_) return;
+    becomeUnavailable("No Wi‑Fi adapter");
+    initialize(); // Watch for the adapter to come back.
 }
 
 void NmWifiBackend::applyDeviceProperties(const QVariantMap& properties) {
@@ -229,6 +255,7 @@ void NmWifiBackend::applyDeviceProperties(const QVariantMap& properties) {
         const bool changed = lastScan != lastScan_;
         lastScan_ = lastScan;
         if (changed && scanning_ && scanQuietTimer_.isActive()) finishScan();
+        // A change before the RequestScan reply is handled by the reply.
     }
 }
 
@@ -370,7 +397,9 @@ WifiStatus NmWifiBackend::status() const {
         return status;
     }
     if (deviceState_ >= device_state::kPrepare && deviceState_ <= device_state::kSecondaries) {
-        const QByteArray ssid = attempt_ ? attemptSsid_ : haveActive ? active->second.ssidBytes : QByteArray();
+        // After the attempt's result, the device is rejoining another network.
+        const bool joining = attempt_ && !attempt_->result();
+        const QByteArray ssid = joining ? attemptSsid_ : haveActive ? active->second.ssidBytes : QByteArray();
         return {.state = State::Connecting, .ssid = displaySsid(ssid)};
     }
     return {.state = State::Disconnected};
@@ -410,8 +439,13 @@ void NmWifiBackend::requestScan() {
         return;
     }
     scanning_ = true;
+    scanBaseline_ = lastScan_;
     call(
-        nm::buildRequestScanMessage(devicePath_), [this](const QDBusMessage&) { scanQuietTimer_.start(kScanQuietMs); },
+        nm::buildRequestScanMessage(devicePath_),
+        [this](const QDBusMessage&) {
+            if (lastScan_ != scanBaseline_) finishScan(); // Already done.
+            else scanQuietTimer_.start(kScanQuietMs);
+        },
         [this](const QString& errorName) {
             scanning_ = false;
             const WifiError error = classifyCallError(errorName);
@@ -420,8 +454,8 @@ void NmWifiBackend::requestScan() {
 }
 
 void NmWifiBackend::finishScan() {
-    scanQuietTimer_.stop();
     if (!scanning_) return;
+    scanQuietTimer_.stop();
     reloadAccessPoints([this] {
         scanning_ = false;
         lastScanTime_ = QDateTime::currentDateTime();
@@ -439,6 +473,7 @@ bool NmWifiBackend::connectTo(const WifiNetwork& network, const QString& passwor
             if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::Activate,
                                                      "org.freedesktop.DBus.Error.ServiceUnknown"));
         });
+        emit statusChanged();
         return true;
     }
     const std::vector<QString> saved = profilesFor(network.ssidBytes);
@@ -454,9 +489,12 @@ bool NmWifiBackend::connectTo(const WifiNetwork& network, const QString& passwor
                 if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::Activate, errorName));
             });
     } else if (!saved.empty()) {
-        // A new password replaces the saved profile rather than editing it:
-        // re-marshalling NetworkManager's typed settings loses D-Bus types.
-        deleteThenAdd(saved, network, password);
+        // A new password gets a new profile rather than an edit: re-marshalling
+        // NetworkManager's typed settings loses D-Bus types. The old profiles
+        // go only once the new one has joined, so a mistyped retry loses
+        // nothing.
+        supersededProfiles_ = saved;
+        addAndActivate(network, password);
     } else {
         addAndActivate(network, password);
     }
@@ -466,24 +504,7 @@ bool NmWifiBackend::connectTo(const WifiNetwork& network, const QString& passwor
 
 void NmWifiBackend::startAttempt(bool createdProfile) {
     const QString previous = deviceState_ == device_state::kActivated ? activeProfilePath_ : QString();
-    attempt_.emplace(createdProfile, previous);
-}
-
-void NmWifiBackend::deleteThenAdd(std::vector<QString> profiles, const WifiNetwork& network,
-                                  const QString& password) {
-    if (!attempt_) startAttempt(true);
-    if (profiles.empty()) {
-        addAndActivate(network, password);
-        return;
-    }
-    const QString path = profiles.back();
-    profiles.pop_back();
-    call(
-        nm::buildDeleteMessage(path),
-        [this, profiles, network, password](const QDBusMessage&) { deleteThenAdd(profiles, network, password); },
-        [this](const QString& errorName) {
-            if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::AddAndActivate, errorName));
-        });
+    attempt_.emplace(createdProfile, previous, deviceState_);
 }
 
 void NmWifiBackend::addAndActivate(const WifiNetwork& network, const QString& password) {
@@ -550,6 +571,10 @@ void NmWifiBackend::apply(const ConnectActions& actions) {
         case Kind::Finish:
             fmt::print(stderr, "Wi‑Fi: connect {} → {}\n", displaySsid(attemptSsid_).toStdString(),
                        toString(action.error));
+            if (action.error == WifiError::None) {
+                for (const QString& old : supersededProfiles_) call(nm::buildDeleteMessage(old), {});
+            }
+            supersededProfiles_.clear();
             emit networksChanged();
             emit connectFinished(attemptSsid_, action.error);
             break;
@@ -567,10 +592,12 @@ void NmWifiBackend::apply(const ConnectActions& actions) {
 
 void NmWifiBackend::forget(const QByteArray& ssidBytes) {
     const std::vector<QString> paths = profilesFor(ssidBytes);
-    if (paths.empty()) {
-        QTimer::singleShot(0, this, [this, ssidBytes] { emit forgetFinished(ssidBytes, WifiError::None); });
+    if (!available_ || paths.empty()) {
+        const WifiError error = available_ ? WifiError::None : WifiError::Unavailable;
+        QTimer::singleShot(0, this, [this, ssidBytes, error] { emit forgetFinished(ssidBytes, error); });
         return;
     }
+    pendingForgets_.push_back(ssidBytes);
     struct Progress {
         qsizetype remaining;
         WifiError error = WifiError::None;
@@ -578,6 +605,9 @@ void NmWifiBackend::forget(const QByteArray& ssidBytes) {
     auto progress = std::make_shared<Progress>(Progress{qsizetype(paths.size())});
     const auto done = [this, ssidBytes, progress] {
         if (--progress->remaining > 0) return;
+        if (auto it = std::find(pendingForgets_.begin(), pendingForgets_.end(), ssidBytes); it != pendingForgets_.end()) {
+            pendingForgets_.erase(it);
+        }
         fmt::print(stderr, "Wi‑Fi: forget {} → {}\n", displaySsid(ssidBytes).toStdString(),
                    toString(progress->error));
         emit networksChanged();

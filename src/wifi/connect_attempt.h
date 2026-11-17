@@ -33,7 +33,10 @@ inline constexpr quint32 kActiveNoSecrets = 9;
 } // namespace reason
 
 inline constexpr int kConnectTimeoutMs = 45000;
+// How long NetworkManager gets to rejoin the previous network on its own.
 inline constexpr int kRecoveryDelayMs = 15000;
+// How long an explicit return to the previous network may take.
+inline constexpr int kRecoveryRejoinMs = 30000;
 
 // What a failed join means to the user. A missing or rejected secret means
 // the password was wrong: the kiosk registers no secret agent, so
@@ -67,14 +70,20 @@ using ConnectActions = std::vector<ConnectAction>;
 
 // One join attempt as a pure state machine. NmWifiBackend feeds it D-Bus
 // replies, signals and timer expiry, and executes the actions it returns.
+//
+// The outcome comes only from the attempt's own active connection (its
+// state, or its disappearance). Device states can belong to another
+// activation (NetworkManager's autoconnect, or the previous network being
+// torn down), so they only supply the failure reason and drive recovery.
 class ConnectAttempt {
 public:
     enum class Call { AddAndActivate, Activate, ReadActiveState, Save };
-    enum class Phase { Starting, Waiting, Saving, Recovering, Done };
+    enum class Phase { Starting, Waiting, Saving, Recovering, Rejoining, Done };
 
     // createdProfile: the attempt creates a new in-memory profile.
     // previousProfile: profile active on the device before the attempt.
-    ConnectAttempt(bool createdProfile, QString previousProfile);
+    // deviceState: the device's NMDeviceState when the attempt starts.
+    ConnectAttempt(bool createdProfile, QString previousProfile, quint32 deviceState = 0);
 
     ConnectActions addReplied(const QString& profilePath, const QString& activePath);
     ConnectActions activateReplied(const QString& activePath);
@@ -83,7 +92,7 @@ public:
     ConnectActions activeStateChanged(quint32 state, quint32 reason);
     ConnectActions deviceStateChanged(quint32 newState, quint32 oldState, quint32 reason);
     ConnectActions saveReplied();
-    ConnectActions timerFired(); // TimedOut or RecoveryTimedOut, by phase.
+    ConnectActions timerFired(); // Attempt timeout or a recovery deadline, by phase.
     ConnectActions serviceVanished();
     ConnectActions cancelled();
 
@@ -97,6 +106,7 @@ private:
     ConnectActions fail(WifiError error);
     ConnectActions finish(WifiError error);
     ConnectActions recoveryTimedOut();
+    ConnectActions recovered();
     bool finished() const { return result_.has_value(); }
 
     bool createdProfile_;
@@ -105,10 +115,8 @@ private:
     QString activePath_;
     Phase phase_ = Phase::Starting;
     std::optional<WifiError> result_;
-    bool sawActivating_ = false;
-    std::optional<quint32> lastDeviceState_;
-    std::optional<quint32> lastDeviceReason_;
-    std::optional<quint32> earlyDeviceOutcome_; // Activated or Failed before the reply.
+    quint32 deviceState_;
+    std::optional<quint32> failureReason_; // Device reason seen while waiting.
 };
 
 } // namespace pi_control::wifi

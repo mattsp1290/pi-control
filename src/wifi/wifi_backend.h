@@ -32,6 +32,8 @@ struct WifiNetwork {
     QString unsupportedReason{}; // "Enterprise" or "WEP" when Unsupported.
     bool active = false;
     bool saved = false;
+
+    bool operator==(const WifiNetwork&) const = default;
 };
 
 enum class WifiError { None, WrongPassword, NotPermitted, NotFound, Timeout, Unavailable, Failed };

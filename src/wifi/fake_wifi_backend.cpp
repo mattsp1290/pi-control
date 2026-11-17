@@ -133,9 +133,17 @@ void FakeWifiBackend::finishConnect() {
     } else {
         setStatus(previousStatus_);
     }
-    connecting_ = false;
+    const bool recovering = result != WifiError::None && result != WifiError::Unavailable
+                            && recoveryDelay_.count() > 0;
+    connecting_ = recovering;
     emit networksChanged();
     emit connectFinished(ssidBytes, result);
+    if (recovering) {
+        QTimer::singleShot(recoveryDelay_, this, [this] {
+            connecting_ = false;
+            emit statusChanged();
+        });
+    }
 }
 
 void FakeWifiBackend::vanish() {

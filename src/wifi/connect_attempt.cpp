@@ -6,10 +6,6 @@ namespace {
 
 using Kind = ConnectAction::Kind;
 
-bool isActivating(quint32 state) {
-    return state >= device_state::kPrepare && state <= device_state::kSecondaries;
-}
-
 void append(ConnectActions& to, ConnectActions more) {
     to.insert(to.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
 }
@@ -39,8 +35,8 @@ WifiError classifyCallError(const QString& errorName) {
     return WifiError::Failed;
 }
 
-ConnectAttempt::ConnectAttempt(bool createdProfile, QString previousProfile)
-    : createdProfile_(createdProfile), previousProfile_(std::move(previousProfile)) {}
+ConnectAttempt::ConnectAttempt(bool createdProfile, QString previousProfile, quint32 deviceState)
+    : createdProfile_(createdProfile), previousProfile_(std::move(previousProfile)), deviceState_(deviceState) {}
 
 ConnectActions ConnectAttempt::addReplied(const QString& profilePath, const QString& activePath) {
     if (phase_ != Phase::Starting) return {};
@@ -56,10 +52,6 @@ ConnectActions ConnectAttempt::activateReplied(const QString& activePath) {
 ConnectActions ConnectAttempt::replied(const QString& activePath) {
     activePath_ = activePath;
     phase_ = Phase::Waiting;
-    if (earlyDeviceOutcome_ == device_state::kActivated) return succeed();
-    if (earlyDeviceOutcome_ == device_state::kFailed) {
-        return fail(classifyConnectFailure(lastDeviceReason_, std::nullopt));
-    }
     // Read after subscribing: the state may have changed before the signal
     // subscription existed.
     return {{Kind::SubscribeActive, activePath},
@@ -74,9 +66,10 @@ ConnectActions ConnectAttempt::callFailed(Call call, const QString& errorName) {
         if (phase_ != Phase::Starting) return {};
         return fail(classifyCallError(errorName));
     case Call::ReadActiveState:
-        // The active connection may already be gone; the device signal or
-        // the timeout decides.
-        return {};
+        // NetworkManager keeps an active connection while it is activating or
+        // activated, so one that is already gone has ended.
+        if (phase_ != Phase::Waiting || classifyCallError(errorName) != WifiError::NotFound) return {};
+        return fail(classifyConnectFailure(failureReason_, std::nullopt));
     case Call::Save:
         // The network works for this session even if it could not be saved.
         if (phase_ != Phase::Saving) return {};
@@ -88,41 +81,32 @@ ConnectActions ConnectAttempt::callFailed(Call call, const QString& errorName) {
 ConnectActions ConnectAttempt::activeStateRead(quint32 state) {
     if (phase_ != Phase::Waiting) return {};
     if (state == active_state::kActivated) return succeed();
-    if (state == active_state::kDeactivated) {
-        return fail(classifyConnectFailure(lastDeviceReason_, std::nullopt));
-    }
+    if (state == active_state::kDeactivated) return fail(classifyConnectFailure(failureReason_, std::nullopt));
     return {};
 }
 
 ConnectActions ConnectAttempt::activeStateChanged(quint32 state, quint32 reason) {
     if (phase_ != Phase::Waiting) return {};
     if (state == active_state::kActivated) return succeed();
-    if (state == active_state::kDeactivated) return fail(classifyConnectFailure(lastDeviceReason_, reason));
+    if (state == active_state::kDeactivated) return fail(classifyConnectFailure(failureReason_, reason));
     return {};
 }
 
 ConnectActions ConnectAttempt::deviceStateChanged(quint32 newState, quint32, quint32 reason) {
-    lastDeviceState_ = newState;
-    if (reason != 0) lastDeviceReason_ = reason;
-    if (isActivating(newState)) sawActivating_ = true;
-    const bool activated = newState == device_state::kActivated && sawActivating_;
-    const bool failed = newState == device_state::kFailed
-                        || (newState == device_state::kDisconnected && sawActivating_);
+    deviceState_ = newState;
     switch (phase_) {
-    case Phase::Starting:
-        if (activated) earlyDeviceOutcome_ = device_state::kActivated;
-        else if (failed) earlyDeviceOutcome_ = device_state::kFailed;
-        return {};
     case Phase::Waiting:
-        if (activated) return succeed();
-        if (failed) return fail(classifyConnectFailure(lastDeviceReason_, std::nullopt));
-        return {};
-    case Phase::Recovering:
-        if (newState == device_state::kActivated) {
-            phase_ = Phase::Done;
-            return {{Kind::RecoveryDone}};
+        if ((newState == device_state::kFailed || newState == device_state::kDisconnected) && reason != 0) {
+            failureReason_ = reason;
         }
         return {};
+    case Phase::Recovering:
+    case Phase::Rejoining:
+        if (newState == device_state::kActivated) return recovered();
+        // The explicit rejoin failed; nothing more to try.
+        if (phase_ == Phase::Rejoining && newState == device_state::kFailed) return recovered();
+        return {};
+    case Phase::Starting:
     case Phase::Saving:
     case Phase::Done:
         return {};
@@ -146,6 +130,8 @@ ConnectActions ConnectAttempt::timerFired() {
         return finish(WifiError::None);
     case Phase::Recovering:
         return recoveryTimedOut();
+    case Phase::Rejoining:
+        return recovered();
     case Phase::Starting:
     case Phase::Done:
         return {};
@@ -154,13 +140,15 @@ ConnectActions ConnectAttempt::timerFired() {
 }
 
 ConnectActions ConnectAttempt::recoveryTimedOut() {
-    phase_ = Phase::Done;
     // Already back on a network, or on its way: do not interrupt it.
-    if (lastDeviceState_ && *lastDeviceState_ >= device_state::kPrepare
-        && *lastDeviceState_ <= device_state::kActivated) {
-        return {{Kind::RecoveryDone}};
-    }
-    return {{Kind::ActivatePrevious, previousProfile_}, {Kind::RecoveryDone}};
+    if (deviceState_ >= device_state::kPrepare && deviceState_ <= device_state::kActivated) return recovered();
+    phase_ = Phase::Rejoining;
+    return {{Kind::ActivatePrevious, previousProfile_}, {Kind::StartTimer, {}, kRecoveryRejoinMs}};
+}
+
+ConnectActions ConnectAttempt::recovered() {
+    phase_ = Phase::Done;
+    return {{Kind::RecoveryDone}};
 }
 
 ConnectActions ConnectAttempt::serviceVanished() {
@@ -178,7 +166,8 @@ ConnectActions ConnectAttempt::serviceVanished() {
 ConnectActions ConnectAttempt::cancelled() {
     if (phase_ == Phase::Done) return {};
     ConnectActions actions;
-    if (!finished() && createdProfile_ && !profilePath_.isEmpty()) {
+    // While saving, the profile is the working connection: keep it.
+    if (!finished() && phase_ != Phase::Saving && createdProfile_ && !profilePath_.isEmpty()) {
         actions.push_back({Kind::DeleteProfile, profilePath_});
     }
     phase_ = Phase::Done;
@@ -204,7 +193,9 @@ ConnectActions ConnectAttempt::fail(WifiError error) {
 ConnectActions ConnectAttempt::finish(WifiError error) {
     result_ = error;
     ConnectActions actions{{Kind::Finish, {}, 0, error}};
-    if (error != WifiError::None && !previousProfile_.isEmpty()) {
+    // Recover only if the device actually left the previous network. A
+    // request NetworkManager rejected outright never touched it.
+    if (error != WifiError::None && !previousProfile_.isEmpty() && deviceState_ != device_state::kActivated) {
         phase_ = Phase::Recovering;
         actions.push_back({Kind::StartTimer, {}, kRecoveryDelayMs});
         return actions;

@@ -177,6 +177,9 @@ private slots:
         AppFixture fixture({.dryRun = true}, std::move(config));
         QCOMPARE(screensaverPanel(fixture)->choices()->checkedButton()->objectName(), QString("mandelbrot"));
         QCOMPARE(fixture.settings->screensaverId(), QString());
+        // Choosing the override in Settings saves it.
+        emit screensaverPanel(fixture)->choices()->idClicked(1);
+        QCOMPARE(fixture.settings->screensaverId(), QString("mandelbrot"));
     }
 
     void saveFailureKeepsChoiceForSession() {

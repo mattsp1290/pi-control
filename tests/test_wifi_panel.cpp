@@ -190,8 +190,6 @@ private slots:
                                         network("Cabin", 60, WifiSecurity::Personal, true)});
         fixture.open();
         fixture.panel()->setForgetConfirmWindow(300ms);
-        fixture.fakeWifi().setNetworks({network("HomeNet", 80, WifiSecurity::Personal, true),
-                                        network("Cabin", 60, WifiSecurity::Personal, true)});
         QVERIFY(fixture.panel()->row("HomeNet")->network().active);
         QCOMPARE(fixture.panel()->row("HomeNet")->forgetButton(), nullptr);
         QPushButton* forget = fixture.panel()->row("Cabin")->forgetButton();
@@ -207,6 +205,44 @@ private slots:
         QCOMPARE(fixture.fakeWifi().connectCalls(), 0); // The tap was not also a row tap.
         QTRY_COMPARE(fixture.panel()->statusLine()->text(), QString("Forgot Cabin"));
         QTRY_COMPARE(fixture.panel()->row("Cabin")->forgetButton(), nullptr);
+    }
+
+    void armedForgetSurvivesListUpdates() {
+        PanelFixture fixture;
+        fixture.fakeWifi().setNetworks({network("HomeNet", 80, WifiSecurity::Personal, true),
+                                        network("Cabin", 60, WifiSecurity::Personal, true)});
+        fixture.open();
+        NetworkRow* cabin = fixture.panel()->row("Cabin");
+        fixture.tap(cabin->forgetButton());
+        QCOMPARE(cabin->forgetButton()->text(), QString("Tap again to forget"));
+        // A scan finds another network while Forget is armed.
+        fixture.fakeWifi().setNetworks({network("HomeNet", 80, WifiSecurity::Personal, true),
+                                        network("Cabin", 60, WifiSecurity::Personal, true),
+                                        network("Attic", 30, WifiSecurity::Open)});
+        QCOMPARE(fixture.panel()->row("Cabin"), cabin);
+        fixture.tap(cabin->forgetButton());
+        QCOMPARE(fixture.fakeWifi().forgetCalls(), 1);
+        QTRY_VERIFY(fixture.panel()->row("Attic") != nullptr);
+    }
+
+    void passwordResubmittedDuringRecovery() {
+        PanelFixture fixture;
+        fixture.open();
+        fixture.fakeWifi().setRecoveryDelay(400ms);
+        fixture.tap(fixture.panel()->row("Neighbour5G"));
+        fixture.view()->field()->setText("wrongpass1");
+        QTest::mouseClick(fixture.view()->connectButton(), Qt::LeftButton);
+        QTRY_COMPARE(fixture.view()->messageLabel()->text(), QString("⚠ Wrong password. Try again."));
+        QVERIFY(fixture.wifi->isConnecting()); // Still returning to the previous network.
+        // The failed row no longer claims to be connecting.
+        QCOMPARE(fixture.panel()->row("Neighbour5G")->stateLabel()->text(), QString());
+        fixture.view()->field()->setText("password123");
+        QTest::mouseClick(fixture.view()->connectButton(), Qt::LeftButton);
+        QCOMPARE(fixture.fakeWifi().connectCalls(), 1); // Waits for recovery.
+        QVERIFY(fixture.view()->isConnecting());
+        QTRY_COMPARE(fixture.fakeWifi().connectCalls(), 2);
+        QTRY_COMPARE(fixture.shell->currentTask(), nullptr);
+        QCOMPARE(fixture.panel()->statusLine()->text(), QString("Connected to Neighbour5G"));
     }
 
     void rowsLockedWhileConnecting() {
@@ -295,11 +331,15 @@ private slots:
         config.idleTimeout = 400ms;
         config.wakeGuard = 100ms;
         PanelFixture fixture(std::move(config));
+        // Hold the screensaver off while setting up, so a slow machine cannot
+        // start it before the password is shown.
+        fixture.controller->setInhibited(true);
         fixture.open();
         fixture.tap(fixture.panel()->row("Neighbour5G"));
         fixture.type("abc");
         QTest::mouseClick(fixture.view()->showButton(), Qt::LeftButton);
         QCOMPARE(fixture.view()->field()->echoMode(), QLineEdit::Normal);
+        fixture.controller->setInhibited(false);
         QTRY_VERIFY_WITH_TIMEOUT(fixture.controller->isActive(), 3000);
         QCOMPARE(fixture.view()->field()->echoMode(), QLineEdit::Password);
         QToolButton* d = fixture.view()->keyboard()->key("d");

@@ -22,7 +22,8 @@ ScreensaverPanel::ScreensaverPanel(screensaver::ScreensaverController& controlle
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
-    auto* hint = new QLabel("Starts after 15 seconds without touch.");
+    const auto idleSeconds = std::chrono::duration_cast<std::chrono::seconds>(controller_.idleTimeout()).count();
+    auto* hint = new QLabel(QString("Starts after %1 seconds without touch.").arg(idleSeconds));
     hint->setObjectName("hint");
     hint->setWordWrap(true);
     layout->addWidget(hint);
@@ -65,7 +66,9 @@ void ScreensaverPanel::choose(int index) {
     const auto& screensavers = screensaver::builtinScreensavers();
     if (index < 0 || std::size_t(index) >= screensavers.size()) return;
     const auto& descriptor = screensavers[std::size_t(index)];
-    if (descriptor.id == controller_.screensaverId()) return;
+    // Re-choosing the current screensaver still saves it when the store
+    // differs: a --screensaver override, or an earlier failed save.
+    if (descriptor.id == controller_.screensaverId() && store_.screensaverId() == descriptor.id) return;
     controller_.setScreensaver(descriptor);
     if (store_.setScreensaverId(descriptor.id)) {
         fmt::print(stderr, "Screensaver: selected {}\n", descriptor.id.toStdString());

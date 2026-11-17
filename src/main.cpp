@@ -13,6 +13,7 @@
 #include "app/power_panel.h"
 #include "app/settings_page.h"
 #include "app/settings_store.h"
+#include "app/tabs.h"
 #include "screensaver/registry.h"
 #include "screensaver/screensaver_controller.h"
 #include "system/system_stats.h"
@@ -23,16 +24,20 @@
 #include <QTemporaryDir>
 
 #include <memory>
+#include <optional>
 
 using namespace pi_control;
 using namespace pi_control::screensaver;
 
 namespace {
 
+// The tab bar shows exactly the tabs() list, in order.
 bool hasExpectedTabs(const QTabWidget& tabs) {
-    QStringList titles;
-    for (int i = 0; i < tabs.count(); ++i) titles << tabs.tabText(i);
-    return titles == QStringList{"Home", "Example", "Settings"};
+    QStringList shown;
+    for (int i = 0; i < tabs.count(); ++i) shown << tabs.tabText(i);
+    QStringList expected;
+    for (const auto& tab : app::tabs()) expected << tab.title;
+    return shown == expected;
 }
 
 // Switches to Settings and presses Shut down the way a tap would, without QTest.
@@ -114,10 +119,13 @@ int main(int argc, char** argv) {
     const bool smoke = parser.isSet("smoke-test") || failureTest;
 
     // Smoke runs never touch the developer's own settings.
-    QTemporaryDir smokeSettings;
-    const QString settingsPath = parser.isSet(settingsFileOption) ? parser.value(settingsFileOption)
-                                 : smoke                          ? smokeSettings.filePath("settings.ini")
-                                                                  : app::SettingsStore::defaultPath();
+    std::optional<QTemporaryDir> smokeSettings;
+    QString settingsPath = app::SettingsStore::defaultPath();
+    if (parser.isSet(settingsFileOption)) {
+        settingsPath = parser.value(settingsFileOption);
+    } else if (smoke) {
+        settingsPath = smokeSettings.emplace().filePath("settings.ini");
+    }
     app::SettingsStore settingsStore(settingsPath);
     ScreensaverControllerConfig saverConfig;
     if (cliScreensaver) {

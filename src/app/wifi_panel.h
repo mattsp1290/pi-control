@@ -3,6 +3,7 @@
 #include "wifi/wifi_backend.h"
 
 #include <QAbstractButton>
+#include <QPushButton>
 #include <QPointer>
 #include <QTimer>
 #include <QWidget>
@@ -12,7 +13,6 @@
 
 class QLabel;
 class QProgressBar;
-class QPushButton;
 class QVBoxLayout;
 
 namespace pi_control::screensaver {
@@ -40,12 +40,15 @@ class NetworkRow final : public QAbstractButton {
     Q_OBJECT
 
 public:
-    explicit NetworkRow(const wifi::WifiNetwork& network, QWidget* parent = nullptr);
+    NetworkRow(const wifi::WifiNetwork& network, std::chrono::milliseconds forgetWindow, QWidget* parent = nullptr);
 
     const wifi::WifiNetwork& network() const { return network_; }
     QPushButton* forgetButton() const { return forget_; }
     QLabel* stateLabel() const { return state_; }
     void setConnecting(bool connecting, bool target);
+    void setForgetWindow(std::chrono::milliseconds window) { confirm_.setInterval(window); }
+    // A finger is on the row, or Forget waits for its second tap.
+    bool isBusy() const { return isDown() || confirm_.isActive() || (forget_ && forget_->isDown()); }
     QSize sizeHint() const override;
 
 signals:
@@ -60,7 +63,6 @@ private:
     QProgressBar* busy_;
     QPushButton* forget_ = nullptr;
     QTimer confirm_;
-    friend class WifiPanel;
 };
 
 // Settings section: Wi-Fi status, nearby networks, scan, join and forget.
@@ -71,7 +73,7 @@ public:
     WifiPanel(wifi::WifiBackend& backend, AppShell& shell, screensaver::ScreensaverController& screensaver,
               QWidget* parent = nullptr);
 
-    void setForgetConfirmWindow(std::chrono::milliseconds window) { forgetWindow_ = window; }
+    void setForgetConfirmWindow(std::chrono::milliseconds window);
 
     QLabel* headerLabel() const { return header_; }
     QLabel* statusLine() const { return statusLine_; }
@@ -88,7 +90,11 @@ protected:
     void hideEvent(QHideEvent* event) override;
 
 private:
+    // Brings the rows in line with the backend, keeping unchanged rows so a
+    // press or an armed Forget survives; waits while a row is in use.
     void rebuildRows();
+    void refreshRowStates();
+    void updateEmptyHint();
     void updateHeader();
     void updateScanControls();
     void updateLastScan();
@@ -117,6 +123,7 @@ private:
     bool unavailable_ = false;
     std::chrono::milliseconds forgetWindow_ = kForgetConfirmWindow;
     QTimer statusTimer_;
+    QTimer rebuildRetry_;
     QTimer lastScanTimer_;
 };
 

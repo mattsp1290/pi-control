@@ -40,11 +40,23 @@ std::vector<WifiError> finishes(const ConnectActions& actions) {
 }
 
 // Runs an attempt from a successful AddAndActivate reply onward.
+// The device starts on the previous network (100) when there is one.
 ConnectAttempt startedAttempt(bool created, QString previous = {}) {
-    ConnectAttempt attempt(created, std::move(previous));
+    const quint32 deviceState = previous.isEmpty() ? device_state::kDisconnected : device_state::kActivated;
+    ConnectAttempt attempt(created, std::move(previous), deviceState);
     const auto actions = attempt.addReplied(kProfile, kActive);
     Q_ASSERT(kinds(actions) == (std::vector<Kind>{Kind::SubscribeActive, Kind::ReadActiveState, Kind::StartTimer}));
     return attempt;
+}
+
+// A failed join as NetworkManager reports it on the device and on the
+// attempt's active connection.
+ConnectActions failWithNoSecrets(ConnectAttempt& attempt) {
+    attempt.deviceStateChanged(50, 40, 0);
+    attempt.deviceStateChanged(60, 50, 0);
+    attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+    attempt.deviceStateChanged(device_state::kDisconnected, 120, 0);
+    return attempt.activeStateChanged(active_state::kDeactivated, 0);
 }
 
 WifiNetwork network(const char* ssid, WifiSecurity security, bool saved = false) {
@@ -184,40 +196,55 @@ private slots:
 
     void wrongPasswordDeletesProfile() {
         auto attempt = startedAttempt(true);
-        QVERIFY(attempt.deviceStateChanged(50, 40, 0).empty());
-        QVERIFY(attempt.deviceStateChanged(60, 50, 0).empty());
-        const auto failed = attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+        const auto failed = failWithNoSecrets(attempt);
         QCOMPARE(kinds(failed), (std::vector<Kind>{Kind::DeleteProfile, Kind::Finish, Kind::RecoveryDone}));
         QCOMPARE(failed[0].path, QString(kProfile));
         QCOMPARE(finishes(failed), std::vector<WifiError>{WifiError::WrongPassword});
     }
 
-    void activeObjectGoneThenDeviceFailure() {
+    void activeReasonAloneMeansWrongPassword() {
         auto attempt = startedAttempt(true);
-        QVERIFY(attempt.callFailed(Call::ReadActiveState, "org.freedesktop.DBus.Error.UnknownObject").empty());
-        attempt.deviceStateChanged(50, 40, 0);
-        const auto failed = attempt.deviceStateChanged(device_state::kDisconnected, 50, reason::kDeviceNoSecrets);
+        const auto failed = attempt.activeStateChanged(active_state::kDeactivated, reason::kActiveNoSecrets);
+        QCOMPARE(finishes(failed), std::vector<WifiError>{WifiError::WrongPassword});
+    }
+
+    void activeObjectGoneAfterDeviceFailure() {
+        auto attempt = startedAttempt(true);
+        attempt.deviceStateChanged(60, 50, 0);
+        attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+        // The active connection vanished before the state could be read.
+        const auto failed = attempt.callFailed(Call::ReadActiveState, "org.freedesktop.DBus.Error.UnknownObject");
         QCOMPARE(kinds(failed).front(), Kind::DeleteProfile);
         QCOMPARE(finishes(failed), std::vector<WifiError>{WifiError::WrongPassword});
     }
 
+    void deviceStatesAloneDecideNothing() {
+        auto attempt = startedAttempt(true);
+        QVERIFY(attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets).empty());
+        QVERIFY(attempt.deviceStateChanged(device_state::kActivated, 90, 0).empty());
+        QCOMPARE(attempt.phase(), ConnectAttempt::Phase::Waiting);
+    }
+
     void savedProfileFailureKeepsProfile() {
-        ConnectAttempt attempt(false, {});
+        ConnectAttempt attempt(false, {}, device_state::kDisconnected);
         attempt.activateReplied(kActive);
-        attempt.deviceStateChanged(60, 50, 0);
-        const auto failed = attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+        const auto failed = failWithNoSecrets(attempt);
         QCOMPARE(kinds(failed), (std::vector<Kind>{Kind::Finish, Kind::RecoveryDone}));
         QCOMPARE(finishes(failed), std::vector<WifiError>{WifiError::WrongPassword});
     }
 
-    void leavingPreviousNetworkIsNotFailure() {
-        auto attempt = startedAttempt(true, kPrevious);
-        // The previous connection is torn down before the new one starts.
-        QVERIFY(attempt.deviceStateChanged(110, 100, 0).empty());
-        QVERIFY(attempt.deviceStateChanged(device_state::kDisconnected, 110, 0).empty());
-        QVERIFY(attempt.deviceStateChanged(device_state::kPrepare, 30, 0).empty());
-        QCOMPARE(kinds(attempt.deviceStateChanged(device_state::kActivated, 90, 0)),
-                 std::vector<Kind>{Kind::SaveProfile});
+    void otherActivationBeforeReplyIsIgnored() {
+        // NetworkManager is still rejoining the previous network when the
+        // join starts; its states, success or cancellation, are not ours.
+        ConnectAttempt attempt(true, kPrevious, 50);
+        QVERIFY(attempt.deviceStateChanged(device_state::kActivated, 90, 0).empty());
+        QVERIFY(attempt.deviceStateChanged(110, 100, 60).empty());
+        QVERIFY(attempt.deviceStateChanged(device_state::kDisconnected, 110, 60).empty());
+        QCOMPARE(kinds(attempt.addReplied(kProfile, kActive)),
+                 (std::vector<Kind>{Kind::SubscribeActive, Kind::ReadActiveState, Kind::StartTimer}));
+        // The previous activation's teardown after the reply is not a failure either.
+        QVERIFY(attempt.deviceStateChanged(device_state::kDisconnected, 50, 60).empty());
+        QCOMPARE(kinds(attempt.activeStateChanged(active_state::kActivated, 0)), std::vector<Kind>{Kind::SaveProfile});
     }
 
     void timeoutThenLateActivation() {
@@ -235,12 +262,20 @@ private slots:
     void permissionDeniedOnAdd() {
         for (const char* name : {"org.freedesktop.NetworkManager.Settings.PermissionDenied",
                                  "org.freedesktop.NetworkManager.Device.NotAllowed"}) {
-            ConnectAttempt attempt(true, {});
+            ConnectAttempt attempt(true, {}, device_state::kDisconnected);
             const auto failed = attempt.callFailed(Call::AddAndActivate, name);
             QCOMPARE(finishes(failed), std::vector<WifiError>{WifiError::NotPermitted});
             const auto failedKinds = kinds(failed);
             QVERIFY(std::find(failedKinds.begin(), failedKinds.end(), Kind::DeleteProfile) == failedKinds.end());
         }
+    }
+
+    void rejectedRequestNeverTouchesCurrentNetwork() {
+        // The device never left the previous network: no recovery, no bounce.
+        ConnectAttempt attempt(true, kPrevious, device_state::kActivated);
+        const auto failed = attempt.callFailed(Call::AddAndActivate,
+                                               "org.freedesktop.NetworkManager.Settings.PermissionDenied");
+        QCOMPARE(failed, (ConnectActions{{Kind::Finish, {}, 0, WifiError::NotPermitted}, {Kind::RecoveryDone}}));
     }
 
     void serviceVanished() {
@@ -253,21 +288,29 @@ private slots:
 
     void failureReturnsToPreviousNetwork() {
         auto attempt = startedAttempt(true, kPrevious);
-        attempt.deviceStateChanged(60, 50, 0);
-        const auto failed = attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+        const auto failed = failWithNoSecrets(attempt);
         QCOMPARE(kinds(failed), (std::vector<Kind>{Kind::DeleteProfile, Kind::Finish, Kind::StartTimer}));
         QCOMPARE(failed.back().milliseconds, kRecoveryDelayMs);
         QCOMPARE(attempt.phase(), ConnectAttempt::Phase::Recovering);
-        const auto recovered = attempt.timerFired();
-        QCOMPARE(recovered, (ConnectActions{{Kind::ActivatePrevious, kPrevious}, {Kind::RecoveryDone}}));
+        const auto rejoin = attempt.timerFired();
+        QCOMPARE(rejoin, (ConnectActions{{Kind::ActivatePrevious, kPrevious}, {Kind::StartTimer, {}, kRecoveryRejoinMs}}));
+        // Still busy until the rejoin resolves, so no new join races it.
+        QCOMPARE(attempt.phase(), ConnectAttempt::Phase::Rejoining);
+        QVERIFY(attempt.deviceStateChanged(device_state::kPrepare, 30, 0).empty());
+        QCOMPARE(attempt.deviceStateChanged(device_state::kActivated, 90, 0), (ConnectActions{{Kind::RecoveryDone}}));
         QVERIFY(attempt.isDone());
+    }
+
+    void rejoinGivesUpAtItsDeadline() {
+        auto attempt = startedAttempt(true, kPrevious);
+        failWithNoSecrets(attempt);
+        attempt.timerFired();
+        QCOMPARE(attempt.timerFired(), (ConnectActions{{Kind::RecoveryDone}}));
     }
 
     void deviceReconnectsDuringRecovery() {
         auto attempt = startedAttempt(true, kPrevious);
-        attempt.deviceStateChanged(60, 50, 0);
-        attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
-        attempt.deviceStateChanged(device_state::kDisconnected, 120, 0);
+        failWithNoSecrets(attempt);
         attempt.deviceStateChanged(device_state::kPrepare, 30, 0);
         QCOMPARE(attempt.deviceStateChanged(device_state::kActivated, 90, 0), (ConnectActions{{Kind::RecoveryDone}}));
         QVERIFY(attempt.timerFired().empty());
@@ -278,11 +321,17 @@ private slots:
         QCOMPARE(attempt.cancelled(), (ConnectActions{{Kind::DeleteProfile, kProfile}, {Kind::RecoveryDone}}));
     }
 
+    void cancelledWhileSavingKeepsWorkingProfile() {
+        auto attempt = startedAttempt(true, kPrevious);
+        attempt.activeStateChanged(active_state::kActivated, 0);
+        QCOMPARE(attempt.phase(), ConnectAttempt::Phase::Saving);
+        QCOMPARE(attempt.cancelled(), (ConnectActions{{Kind::RecoveryDone}}));
+    }
+
     void connectDuringRecoveryIsRejected() {
         NmWifiBackend backend(QDBusConnection(QStringLiteral("pi-control-test-disconnected")));
         auto attempt = startedAttempt(true, kPrevious);
-        attempt.deviceStateChanged(60, 50, 0);
-        attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+        failWithNoSecrets(attempt);
         QCOMPARE(attempt.phase(), ConnectAttempt::Phase::Recovering);
         backend.adoptAttemptForTesting(std::move(attempt), "Test");
         QSignalSpy finished(&backend, &WifiBackend::connectFinished);
@@ -342,8 +391,7 @@ private slots:
         QTRY_COMPARE(finished.count(), 1);
 
         auto attempt = startedAttempt(true, kPrevious);
-        attempt.deviceStateChanged(60, 50, 0);
-        attempt.deviceStateChanged(device_state::kFailed, 60, reason::kDeviceNoSecrets);
+        failWithNoSecrets(attempt);
 
         const QByteArray log = capture.text();
         QVERIFY2(log.contains("Wi‑Fi: connect Home"), log.constData());

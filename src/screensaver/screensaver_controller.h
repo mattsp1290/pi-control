@@ -28,6 +28,7 @@ struct ScreensaverControllerConfig {
     // Longest time activation waits for a press that was already held.
     std::chrono::milliseconds maxHoldDeferral = kMaxHoldDeferral;
     // The screensaver every activation shows; null disables the controller.
+    // Must outlive the controller (registry entries do).
     const ScreensaverDescriptor* screensaver = defaultScreensaver();
     // Draws each activation's seed. Empty: QRandomGenerator::global().
     std::function<quint32()> random;
@@ -55,7 +56,10 @@ public:
 
     void setInhibited(bool inhibited);
     // Used from the next activation on; a running screensaver keeps going.
+    // The controller keeps a pointer: descriptor must outlive it, as
+    // builtinScreensavers() entries do.
     void setScreensaver(const ScreensaverDescriptor& descriptor);
+    std::chrono::milliseconds idleTimeout() const { return config_.idleTimeout; }
     QString screensaverId() const;
     // Shows the selected screensaver now, unless inhibited. Like an idle
     // activation, it waits for a held press to be released.

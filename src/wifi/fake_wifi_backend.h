@@ -30,6 +30,9 @@ public:
     void setPasswordFor(const QByteArray& ssidBytes, const QString& password) { passwords_[ssidBytes] = password; }
     void setNextError(WifiError error) { nextError_ = error; }
     void setConnectDelay(std::chrono::milliseconds delay) { connectDelay_ = delay; }
+    // Like NetworkManager returning to the previous network: after a failed
+    // connect, isConnecting() stays true this long, then statusChanged.
+    void setRecoveryDelay(std::chrono::milliseconds delay) { recoveryDelay_ = delay; }
     // NetworkManager disappears: a pending connect or scan ends Unavailable.
     void vanish();
 
@@ -55,6 +58,7 @@ private:
     std::map<QByteArray, QString> passwords_;
     std::chrono::milliseconds scanDelay_{50};
     std::chrono::milliseconds connectDelay_{50};
+    std::chrono::milliseconds recoveryDelay_{0};
     WifiError scanError_ = WifiError::None;
     std::optional<WifiError> nextError_;
     std::optional<QDateTime> lastScanTime_;

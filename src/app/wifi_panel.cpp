@@ -86,7 +86,7 @@ QString connectErrorText(WifiError error) {
     return "Couldn't connect. Try again.";
 }
 
-NetworkRow::NetworkRow(const wifi::WifiNetwork& network, QWidget* parent)
+NetworkRow::NetworkRow(const wifi::WifiNetwork& network, std::chrono::milliseconds forgetWindow, QWidget* parent)
     : QAbstractButton(parent), network_(network) {
     setObjectName("networkRow");
     setFocusPolicy(Qt::NoFocus);
@@ -127,6 +127,7 @@ NetworkRow::NetworkRow(const wifi::WifiNetwork& network, QWidget* parent)
         forget_->setObjectName("forgetButton");
         forget_->setFocusPolicy(Qt::NoFocus);
         confirm_.setSingleShot(true);
+        confirm_.setInterval(forgetWindow);
         connect(&confirm_, &QTimer::timeout, forget_, [this] { forget_->setText("Forget"); });
         connect(forget_, &QPushButton::clicked, this, [this] {
             if (confirm_.isActive()) {
@@ -213,6 +214,9 @@ WifiPanel::WifiPanel(wifi::WifiBackend& backend, AppShell& shell, screensaver::S
     layout->addWidget(statusLine_);
     layout->addLayout(scanRow);
 
+    rebuildRetry_.setSingleShot(true);
+    rebuildRetry_.setInterval(200);
+    connect(&rebuildRetry_, &QTimer::timeout, this, &WifiPanel::rebuildRows);
     statusTimer_.setSingleShot(true);
     statusTimer_.setInterval(kStatusLineDuration);
     connect(&statusTimer_, &QTimer::timeout, statusLine_, &QLabel::hide);
@@ -231,11 +235,10 @@ WifiPanel::WifiPanel(wifi::WifiBackend& backend, AppShell& shell, screensaver::S
             unavailable_ = unavailable;
             rebuildRows();
         }
-        const bool connecting = backend_.isConnecting();
-        for (NetworkRow* row : rows()) row->setConnecting(connecting, row->network().ssidBytes == connectingSsid_);
-        if (!connecting) connectingSsid_.clear();
+        if (!backend_.isConnecting()) connectingSsid_.clear();
+        refreshRowStates();
         // A password submitted while the previous attempt was still settling.
-        if (!connecting && passwordView_ && passwordView_->isConnecting() && !viewAwaitsResult_
+        if (!backend_.isConnecting() && passwordView_ && passwordView_->isConnecting() && !viewAwaitsResult_
             && shell_.currentTask() == passwordView_) {
             if (backend_.connectTo(passwordView_->network(), passwordView_->field()->text())) {
                 viewAwaitsResult_ = true;
@@ -275,28 +278,57 @@ NetworkRow* WifiPanel::row(const QString& ssid) const {
     return nullptr;
 }
 
+void WifiPanel::setForgetConfirmWindow(std::chrono::milliseconds window) {
+    forgetWindow_ = window;
+    for (NetworkRow* row : rows()) row->setForgetWindow(window);
+}
+
 void WifiPanel::rebuildRows() {
-    for (NetworkRow* row : rows()) {
-        rowsLayout_->removeWidget(row);
-        row->hide();
-        row->deleteLater();
+    const std::vector<NetworkRow*> current = rows();
+    if (std::any_of(current.begin(), current.end(), [](NetworkRow* row) { return row->isBusy(); })) {
+        rebuildRetry_.start(); // Do not pull a row from under a finger.
+        return;
     }
     const bool unavailable = backend_.status().state == State::Unavailable;
     const std::vector<wifi::WifiNetwork> networks = unavailable ? std::vector<wifi::WifiNetwork>{}
                                                                 : backend_.networks();
     const std::size_t shown = expanded_ ? networks.size() : std::min<std::size_t>(networks.size(), kMaxCollapsedRows);
-    const bool connecting = backend_.isConnecting();
+    std::vector<NetworkRow*> unused = current;
+    for (NetworkRow* row : current) rowsLayout_->removeWidget(row);
     for (std::size_t i = 0; i < shown; ++i) {
-        auto* row = new NetworkRow(networks[i]);
-        row->confirm_.setInterval(forgetWindow_);
-        row->setConnecting(connecting, networks[i].ssidBytes == connectingSsid_);
-        connect(row, &QAbstractButton::clicked, this, [this, row] { tapped(row->network()); });
-        connect(row, &NetworkRow::forgetConfirmed, this, [this](const QByteArray& ssid) { backend_.forget(ssid); });
+        const auto same = std::find_if(unused.begin(), unused.end(),
+                                       [&](NetworkRow* row) { return row->network() == networks[i]; });
+        NetworkRow* row = nullptr;
+        if (same != unused.end()) {
+            row = *same;
+            unused.erase(same);
+        } else {
+            row = new NetworkRow(networks[i], forgetWindow_);
+            connect(row, &QAbstractButton::clicked, this, [this, row] { tapped(row->network()); });
+            connect(row, &NetworkRow::forgetConfirmed, this,
+                    [this](const QByteArray& ssid) { backend_.forget(ssid); });
+        }
         rowsLayout_->addWidget(row);
+        row->show();
     }
+    for (NetworkRow* row : unused) {
+        row->hide();
+        row->deleteLater();
+    }
+    refreshRowStates();
     showAll_->setVisible(shown < networks.size());
     showAll_->setText(QString("Show all (%1)").arg(networks.size()));
-    empty_->setVisible(!unavailable && networks.empty() && backend_.lastScanTime().has_value());
+    updateEmptyHint();
+}
+
+void WifiPanel::refreshRowStates() {
+    const bool connecting = backend_.isConnecting();
+    for (NetworkRow* row : rows()) row->setConnecting(connecting, row->network().ssidBytes == connectingSsid_);
+}
+
+void WifiPanel::updateEmptyHint() {
+    const bool unavailable = backend_.status().state == State::Unavailable;
+    empty_->setVisible(!unavailable && rows().empty() && backend_.lastScanTime().has_value());
 }
 
 void WifiPanel::updateHeader() {
@@ -386,6 +418,10 @@ void WifiPanel::connectFinished(const QByteArray& ssidBytes, WifiError error) {
     }
     const bool fromView = viewAwaitsResult_ && passwordView_ && passwordView_->network().ssidBytes == ssidBytes;
     viewAwaitsResult_ = false;
+    // The attempt is over even if NetworkManager is still rejoining the
+    // previous network: the row must not keep saying "Connecting…".
+    connectingSsid_.clear();
+    refreshRowStates();
     if (fromView) {
         if (error == WifiError::None) {
             passwordView_->clear();
@@ -413,7 +449,7 @@ void WifiPanel::scanFinished(WifiError error) {
     case WifiError::Failed: showStatus("Scan failed. Try again."); break;
     default: break;
     }
-    rebuildRows();
+    updateEmptyHint();
 }
 
 void WifiPanel::forgetFinished(const QByteArray& ssidBytes, WifiError error) {

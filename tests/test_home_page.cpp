@@ -71,6 +71,8 @@ private slots:
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  HomeNet"));
         QCOMPARE(fixture.text("wifiStrengthLabel"), QString("72 %"));
         QCOMPARE(fixture.home()->findChild<SignalBars*>()->litBars(), 3);
+        fixture.wifiStatus().setStatus({.state = State::Connected, .strength = 40});
+        QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  Connected"));
         fixture.wifiStatus().setStatus({.state = State::Connecting, .ssid = "HomeNet"});
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  Connecting to HomeNet…"));
         fixture.wifiStatus().setStatus({.state = State::RadioOff});
