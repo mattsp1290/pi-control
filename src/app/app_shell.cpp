@@ -16,7 +16,7 @@ constexpr auto kStyleSheet = R"(
 QWidget { background: #101820; color: #ffffff; font-size: 22px; }
 QLabel { background: transparent; }
 QLabel#pageTitle { font-size: 30px; font-weight: bold; }
-QLabel#sectionTitle { font-size: 26px; font-weight: bold; padding-top: 16px; }
+QLabel#sectionTitle { font-size: 26px; font-weight: bold; padding: 16px 0px 0px 0px; }
 QLabel#hint, QLabel#powerStatus { color: #b8c4cf; }
 QTabWidget::pane { border: none; }
 QTabBar::tab { min-height: 64px; font-size: 24px; color: #9fb0bf; background: #17222c;
@@ -38,7 +38,11 @@ QScrollBar:vertical { width: 8px; background: transparent; }
 QScrollBar::handle:vertical { background: #3b4d5d; border-radius: 4px; min-height: 40px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 QRadioButton { min-height: 56px; spacing: 16px; }
-QRadioButton::indicator { width: 32px; height: 32px; }
+QRadioButton::indicator { width: 26px; height: 26px; border: 3px solid #9fb0bf; border-radius: 16px;
+                          background: transparent; }
+QRadioButton::indicator:checked { border-color: #4fa3e0;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+                                stop:0 #4fa3e0, stop:0.55 #4fa3e0, stop:0.6 transparent); }
 QLineEdit { background: #f4f7fa; color: #101820; border: 2px solid #3b4d5d; border-radius: 10px;
             min-height: 52px; padding: 0 12px; font-size: 26px; }
 QLineEdit:focus { border-color: #4fa3e0; }

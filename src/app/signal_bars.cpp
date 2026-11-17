@@ -6,6 +6,7 @@ namespace pi_control::app {
 
 SignalBars::SignalBars(QWidget* parent) : QWidget(parent) {
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setStyleSheet("background: transparent;"); // Sits on rows of any color.
     setAccessibleName("Signal strength");
 }
 

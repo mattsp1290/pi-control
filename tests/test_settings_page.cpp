@@ -3,6 +3,7 @@
 #include "app/power_panel.h"
 #include "app/screensaver_panel.h"
 #include "app/settings_page.h"
+#include "app/wifi_panel.h"
 #include "screensaver/registry.h"
 
 #include <QAbstractButton>
@@ -12,6 +13,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QScroller>
 #include <QSignalSpy>
 #include <QTest>
 #include <QVBoxLayout>
@@ -23,6 +25,25 @@ namespace {
 
 ScreensaverPanel* screensaverPanel(const AppFixture& fixture) {
     return fixture.page<SettingsPage>(u"settings")->findChild<ScreensaverPanel*>();
+}
+
+void showWithManyNetworks(AppFixture& fixture) {
+    std::vector<wifi::WifiNetwork> networks;
+    for (int i = 0; i < 15; ++i) {
+        wifi::WifiNetwork network;
+        network.ssid = QString("Network %1").arg(i, 2, 10, QChar('0'));
+        network.ssidBytes = network.ssid.toUtf8();
+        network.strength = 90 - i;
+        network.security = wifi::WifiSecurity::Open;
+        networks.push_back(network);
+    }
+    fixture.fakeWifi().setStatus({.state = wifi::WifiStatus::State::Disconnected});
+    fixture.fakeWifi().setNetworks(networks);
+    fixture.shell->show();
+    QVERIFY(QTest::qWaitForWindowExposed(fixture.shell.get()));
+    fixture.showTab(u"settings");
+    QTRY_VERIFY(!fixture.wifi->isScanning());
+    QTest::qWait(50);
 }
 
 void clickChoice(ScreensaverPanel* panel, const char* id) {
@@ -40,7 +61,7 @@ private slots:
     void sectionsInOrder() {
         AppFixture fixture;
         auto* settings = fixture.page<SettingsPage>(u"settings");
-        QCOMPARE(settings->sectionTitles(), (QStringList{"Screensaver", "Power"}));
+        QCOMPARE(settings->sectionTitles(), (QStringList{"Wi‑Fi", "Screensaver", "Power"}));
         QCOMPARE(settings->lastSection(), settings->powerPanel());
     }
 
@@ -66,6 +87,53 @@ private slots:
         QTRY_COMPARE(clicked.count(), 1);
         QTest::qWait(300);
         QCOMPARE(clicked.count(), 1);
+    }
+
+    void dragOnNetworkRowScrollsPage() {
+        AppFixture fixture;
+        showWithManyNetworks(fixture);
+        auto* settings = fixture.page<SettingsPage>(u"settings");
+        auto* panel = settings->findChild<WifiPanel*>();
+        QCOMPARE(panel->rows().size(), std::size_t(15));
+        QScrollBar* bar = settings->scrollArea()->verticalScrollBar();
+        QCOMPARE(bar->value(), 0);
+        NetworkRow* row = panel->rows()[2];
+        QWidget* viewport = settings->scrollArea()->viewport();
+        QWindow* window = fixture.shell->windowHandle();
+        QPoint at = row->mapTo(fixture.shell.get(), QPoint(100, row->height() / 2));
+        QTest::mousePress(window, Qt::LeftButton, {}, at);
+        for (int i = 0; i < 15; ++i) {
+            QTest::qWait(16);
+            at.ry() -= 16;
+            QTest::mouseMove(window, at);
+        }
+        QTest::mouseRelease(window, Qt::LeftButton, {}, at);
+        QTRY_VERIFY(bar->value() > 0);
+        QCOMPARE(fixture.fakeWifi().connectCalls(), 0); // A drag is not a tap.
+        // Power stays reachable at the bottom.
+        QScroller::scroller(viewport)->stop();
+        bar->setValue(bar->maximum());
+        QApplication::processEvents();
+        PowerPanel* power = settings->powerPanel();
+        const QRect shown(power->shutdownButton()->mapTo(viewport, QPoint(0, 0)), power->shutdownButton()->size());
+        QVERIFY(viewport->rect().contains(shown));
+    }
+
+    void tapOnRowWhileScrolledActsOnce() {
+        AppFixture fixture;
+        showWithManyNetworks(fixture);
+        auto* settings = fixture.page<SettingsPage>(u"settings");
+        auto* panel = settings->findChild<WifiPanel*>();
+        QScrollBar* bar = settings->scrollArea()->verticalScrollBar();
+        bar->setValue(bar->maximum() / 3);
+        QApplication::processEvents();
+        NetworkRow* row = panel->rows()[6];
+        settings->scrollArea()->ensureWidgetVisible(row);
+        QVERIFY(bar->value() > 0);
+        QTest::mouseClick(row, Qt::LeftButton, {}, QPoint(100, row->height() / 2));
+        QTRY_COMPARE(fixture.fakeWifi().connectCalls(), 1);
+        QTest::qWait(300);
+        QCOMPARE(fixture.fakeWifi().connectCalls(), 1);
     }
 
     void oneChoicePerScreensaver() {

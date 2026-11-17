@@ -22,12 +22,15 @@ add_library(pi_control_app STATIC
   src/app/elided_label.cpp
   src/app/example_page.cpp
   src/app/home_page.cpp
+  src/app/password_view.cpp
   src/app/power_panel.cpp
   src/app/screensaver_panel.cpp
   src/app/settings_page.cpp
   src/app/settings_store.cpp
   src/app/signal_bars.cpp
   src/app/tabs.cpp
+  src/app/wifi_panel.cpp
+  src/keyboard/on_screen_keyboard.cpp
   src/system/ip_addresses.cpp
   src/system/system_stats.cpp
   src/wifi/connect_attempt.cpp
@@ -73,6 +76,8 @@ if(BUILD_TESTING)
   pi_control_qt_test(home-page tests/test_home_page.cpp)
   pi_control_qt_test(wifi-backend tests/test_wifi_backend.cpp)
   pi_control_qt_test(settings-store tests/test_settings_store.cpp)
+  pi_control_qt_test(keyboard tests/test_on_screen_keyboard.cpp)
+  pi_control_qt_test(wifi-panel tests/test_wifi_panel.cpp)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
