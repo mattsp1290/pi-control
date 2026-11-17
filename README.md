@@ -1,10 +1,49 @@
 # Pi Control
 
-C++20 fullscreen shutdown appliance for Raspberry Pi 4, targeting **64-bit
+C++20 fullscreen control screen for Raspberry Pi 4, targeting **64-bit
 Raspberry Pi OS Lite (Bookworm or newer)** with systemd, full KMS, HDMI/DSI
-screen and a mouse or touchscreen. One button requests an orderly shutdown
-through systemd-logind. Failure stays on screen and allows retry; requests
-in progress disable the button. Qt 6 Widgets handles display and input.
+screen and a mouse or touchscreen. Qt 6 Widgets handles display and input.
+
+Three tabs run along the top:
+
+- **Home**: the time and date, each network interface's IPv4 address, the
+  Wi‑Fi network and signal strength, and CPU, memory and storage use
+  (refreshed every 2 s).
+- **Example**: placeholder text showing how to add a tab. See
+  [Add a tab](docs/tabs.md).
+- **Settings**, top to bottom:
+  - **Wi‑Fi**: scan for networks, join one with the on-screen keyboard, and
+    forget saved networks you are not connected to.
+  - **Screensaver**: choose the screensaver and preview it.
+  - **Power**: Shut down, which requests an orderly poweroff through
+    systemd-logind. A failure stays on screen and the button works again.
+
+## Wi‑Fi
+
+Wi‑Fi uses NetworkManager over D-Bus, the default on Raspberry Pi OS Bookworm.
+Without NetworkManager the Settings section and Home say why Wi‑Fi is
+unavailable; everything else keeps working. The package does not install
+NetworkManager.
+
+Open and WPA/WPA2/WPA3-Personal networks are supported; Enterprise and WEP
+networks are listed but cannot be joined. A new network is saved only after
+the Pi has joined it: a wrong password leaves nothing saved, and the Pi goes
+back to the network it was on before. The active network is never offered for
+Forget, so the kiosk cannot strand itself offline from the touchscreen.
+
+**Changing Wi‑Fi from the screen can drop your SSH session** if SSH runs over
+that Wi‑Fi link. Keep Ethernet or physical access when testing.
+
+The packaged polkit rule lets the `pi-control` account use exactly three
+NetworkManager actions: `wifi.scan`, `network-control` and
+`settings.modify.system`. Passwords are never logged.
+
+To try the interface without touching real Wi‑Fi, use canned networks (the
+secured ones accept `password123`):
+
+```sh
+./build/pi-control --dry-run --fake-wifi
+```
 
 ## Build and test
 
@@ -24,21 +63,37 @@ it fetches pinned fmt 11.1.4 on first configure (internet required). Qt uses
 OS packages to preserve the Pi graphics integration. The host build is useful
 for tests; build natively on the Pi for deployment. `--smoke-test` exercises
 the actual button using dry-run logic and exits. Normal launch really powers
-off the machine when clicked. Do not use normal launch for desktop testing.
+off the machine when Shut down is pressed, and really changes Wi‑Fi. Use
+`--dry-run --fake-wifi` for desktop testing.
+
+The service holds the Pi's display. To try a development build on the
+touchscreen, stop the service first and start it again afterwards:
+
+```sh
+sudo systemctl stop pi-control
+QT_QPA_PLATFORM=eglfs QT_QPA_EGLFS_INTEGRATION=eglfs_kms QT_QPA_EGLFS_KMS_ATOMIC=1 \
+  ./build/pi-control --dry-run --fake-wifi
+# Ctrl+C to stop, then:
+sudo systemctl start pi-control
+```
 
 ## Screensaver
 
-After 15 seconds without input, a screensaver covers the shutdown screen:
-Conway's Game of Life, a Mandelbrot zoom, or rain on water, chosen at random
-each time. Any touch, click, mouse movement or key press dismisses it without
-pressing the shutdown button. To preview one on a desktop:
+After 15 seconds without input, a screensaver covers the screen: Conway's
+Game of Life (the default), a Mandelbrot zoom, or rain on water. Choose it in
+**Settings → Screensaver**; **Preview** shows it at once. The choice is saved
+in `/var/lib/pi-control/settings.ini` and survives restarts. Any touch, click,
+mouse movement or key press dismisses the screensaver without pressing
+anything underneath.
+
+To use one screensaver for a single run without saving it:
 
 ```sh
 ./build/pi-control --dry-run --screensaver mandelbrot
 ```
 
-`pi-control --help` lists the screensaver ids. The preview still starts after
-15 seconds idle. See [Screensavers](docs/screensavers.md) for the architecture
+`pi-control --help` lists the screensaver ids. It still starts after 15
+seconds idle. See [Screensavers](docs/screensavers.md) for the architecture
 and how to add one.
 
 ## Install, update, and start on boot
@@ -68,7 +123,7 @@ No source checkout, compiler, or Qt development packages are needed on the Pi.
 Concurrent installer runs are rejected.
 
 The package creates a dedicated `pi-control` system account, installs the
-shutdown authorization rule, enables `pi-control.service` for every boot,
+shutdown and Wi‑Fi authorization rule, enables `pi-control.service` for every boot,
 and restarts the service on install, reinstall, or upgrade. An existing
 `pi-control` account must have a system UID (1–999) and a nologin shell.
 The installer checks that the service remains active after five seconds;
@@ -105,7 +160,9 @@ sudo rm -f /usr/local/bin/pi-control /etc/polkit-1/rules.d/49-pi-control.rules
 
 The service runs as the dedicated account with the device groups needed for
 graphics and input; the polkit rule permits poweroff requests including when
-SSH sessions exist, but never inhibitor bypass. No sudo password or root GUI
+SSH sessions exist, but never inhibitor bypass, plus the three Wi‑Fi actions
+above. Its only writable directory is `/var/lib/pi-control`, created by
+systemd (`StateDirectory=`). No sudo password or root GUI
 is needed. `NoNewPrivileges` does not prevent the system-bus authorization
 performed by logind/polkit.
 
@@ -119,13 +176,14 @@ sudo systemctl restart pi-control.service
 
 Verify the
 screen and touch input on the actual Pi, then reboot to verify autostart and
-press the button to verify orderly poweroff. These hardware checks cannot be
+press Settings → Shut down to verify orderly poweroff. These hardware checks cannot be
 proven by the offscreen test. Display output/card selection can be customized
 with Qt's `QT_QPA_EGLFS_KMS_CONFIG` through a systemd override if needed.
 
 To remove a packaged install, run `sudo apt remove pi-control`. This stops and
 disables the service and removes its binary, unit, and authorization rule; the
-system account and local systemd overrides are retained. Qt is LGPL/GPL or
+system account, saved settings and local systemd overrides are retained.
+`sudo apt purge pi-control` also deletes `/var/lib/pi-control`. Qt is LGPL/GPL or
 commercial licensed; review distribution obligations when shipping images.
 
 ## Release and installer verification
@@ -136,8 +194,8 @@ Run the installer boundary tests without root or a running service:
 python3 -m unittest discover -s distribution/tests -v
 ```
 
-The release workflow builds and tests natively on ARM64 in Debian Bookworm,
-then packages the binary, systemd unit, and polkit rule. It derives runtime
+The release workflow builds and tests natively on ARM64 in Debian Bookworm on
+every pull request and release tag, then packages the binary, systemd unit, and polkit rule. It derives runtime
 library dependencies with `dpkg-shlibdeps`. To build a local package (requires
 `dpkg-dev` and `file` in addition to the build dependencies):
 

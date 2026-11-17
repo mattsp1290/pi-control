@@ -1,10 +1,17 @@
 # Screensavers
 
-After 15 seconds without input, Pi Control covers the shutdown screen with a
-screensaver chosen uniformly at random from the built-in list. Any touch,
-click, mouse movement, wheel or key press dismisses it. That input, and the
-rest of the same gesture, never reaches the shutdown button. No screensaver
-starts while a shutdown request is pending.
+After 15 seconds without input, Pi Control covers the screen with the
+screensaver chosen in **Settings → Screensaver** (Conway's Game of Life until
+one is chosen). Each activation still starts from a new random seed. Any
+touch, click, mouse movement, wheel or key press dismisses it. That input,
+and the rest of the same gesture, never reaches the widget underneath. No
+screensaver starts while a shutdown request is pending.
+
+The choice is saved as `screensaver/id` in `$STATE_DIRECTORY/settings.ini`
+(`/var/lib/pi-control/settings.ini` under systemd; the per-user config
+directory in development runs). An unknown saved id falls back to the
+default. `--screensaver <id>` overrides the saved choice for one run without
+saving it.
 
 ## Architecture
 
@@ -15,9 +22,10 @@ All code lives in `src/screensaver/` and builds into the
 | --- | --- |
 | `Screensaver` (`screensaver.h`) | Interface one animation implements: `start`, `resize`, time-based `advance`, `paint`. No timers, widgets or input. All randomness derives from the `start` seed. |
 | `RasterScreensaver` (`raster_screensaver.h`) | Base for screensavers that draw a reduced-resolution frame: owns the frame, redraws it only when the simulation moved, scales it to the view. Subclasses implement `render(QImage&)`. `FixedStep` (`screensaver.h`) turns frame times into fixed simulation steps. |
-| Registry (`registry.h/.cpp`) | `builtinScreensavers()` lists every screensaver by id, name and factory. `--screensaver` help text and validation come from it. |
+| Registry (`registry.h/.cpp`) | `builtinScreensavers()` lists every screensaver by id, name and factory; `defaultScreensaver()` is the first. `--screensaver` help text and validation, and the Settings choices, come from it. |
 | `ScreensaverView` | Child widget covering the shutdown screen. Drives the active screensaver at about 30 Hz and logs frame statistics to stderr when dismissed. |
-| `ScreensaverController` | Application-wide event filter. Owns the 15 s idle timer (`kIdleTimeout`), random selection, the wake guard and shutdown inhibition. |
+| `ScreensaverController` | Application-wide event filter. Owns the 15 s idle timer (`kIdleTimeout`), the selected screensaver (`setScreensaver`), `preview()`, the wake guard and shutdown inhibition. |
+| `ScreensaverPanel` (`src/app/`) | The Settings section: one radio button per registry entry and a Preview button. Saves the choice through `SettingsStore`. |
 
 Rendering is CPU-only: each screensaver draws into a reduced-resolution
 `QImage` that is scaled to the screen. The Mandelbrot renderer uses every core
@@ -67,15 +75,18 @@ pressed. Activation waits for the release, for at most 60 s
    QT_QPA_PLATFORM=offscreen ./build-bench/screensaver-bench
    ```
 
-6. Preview it: `./build/pi-control --dry-run --screensaver <id>`. It still
-   starts after 15 seconds without input.
+6. Preview it: choose it in Settings and tap **Preview**, or run
+   `./build/pi-control --dry-run --screensaver <id>` (it still starts after
+   15 seconds without input).
 
-No controller, view or `main.cpp` change is needed.
+No controller, view, Settings or `main.cpp` change is needed.
 
 ## Diagnostics
 
-The service writes stdout and stderr to the journal. Each activation logs
-`Screensaver: <id> after <ms> ms idle`, and each dismissal of a screensaver
+The service writes stdout and stderr to the journal. Startup logs
+`Screensaver selection: <id>`. Each activation logs
+`Screensaver: <id> after <ms> ms idle` (or `Screensaver: <id> preview`), a
+choice in Settings logs `Screensaver: selected <id>`, and each dismissal of a screensaver
 that ran at least 30 frames logs its frame count, median and p95 frame
 interval:
 
