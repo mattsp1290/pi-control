@@ -135,7 +135,8 @@ int main(int argc, char** argv) {
         fmt::print(stderr, "Screensaver: unknown saved id {}; using {}\n", savedScreensaver.toStdString(),
                    choice.descriptor->id.toStdString());
     }
-    fmt::print("Screensaver selection: {}\n", saverConfig.screensaver->id.toStdString());
+    // stderr is unbuffered, so the line reaches the journal at once.
+    fmt::print(stderr, "Screensaver selection: {}\n", saverConfig.screensaver->id.toStdString());
     const app::PowerOptions power{.dryRun = smoke || parser.isSet("dry-run"), .failureTest = failureTest};
 
     system::SystemStatsSampler stats;
