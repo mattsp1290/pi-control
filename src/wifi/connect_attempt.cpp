@@ -35,6 +35,11 @@ WifiError classifyCallError(const QString& errorName) {
     return WifiError::Failed;
 }
 
+WifiError classifyRequestError(const QString& errorName) {
+    const WifiError error = classifyCallError(errorName);
+    return error == WifiError::NotPermitted ? error : WifiError::Failed;
+}
+
 ConnectAttempt::ConnectAttempt(bool createdProfile, QString previousProfile, quint32 deviceState)
     : createdProfile_(createdProfile), previousProfile_(std::move(previousProfile)), deviceState_(deviceState) {}
 

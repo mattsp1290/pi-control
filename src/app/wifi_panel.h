@@ -9,6 +9,7 @@
 #include <QWidget>
 
 #include <chrono>
+#include <optional>
 #include <vector>
 
 class QLabel;
@@ -99,6 +100,10 @@ private:
     void updateScanControls();
     void updateLastScan();
     void tapped(const wifi::WifiNetwork& network);
+    // Asks the backend to join; false while another attempt is under way.
+    bool startJoin(const wifi::WifiNetwork& network, const QString& password, bool fromView);
+    // Sends a password submitted while the previous attempt was settling.
+    void resubmitDeferredPassword();
     void openPasswordView(const wifi::WifiNetwork& network, const QString& message = {});
     void connectFinished(const QByteArray& ssidBytes, wifi::WifiError error);
     void scanFinished(wifi::WifiError error);
@@ -117,8 +122,12 @@ private:
     QPushButton* scan_;
     QLabel* lastScan_;
     QPointer<PasswordView> passwordView_;
-    QByteArray connectingSsid_;
-    bool viewAwaitsResult_ = false; // The password view submitted the in-flight attempt.
+    // The join this panel started and whose result it is waiting for.
+    struct Join {
+        QByteArray ssidBytes;
+        bool fromView = false; // The password view waits for the result.
+    };
+    std::optional<Join> join_;
     bool expanded_ = false;
     bool unavailable_ = false;
     std::chrono::milliseconds forgetWindow_ = kForgetConfirmWindow;

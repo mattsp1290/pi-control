@@ -128,15 +128,12 @@ int main(int argc, char** argv) {
     }
     app::SettingsStore settingsStore(settingsPath);
     ScreensaverControllerConfig saverConfig;
-    if (cliScreensaver) {
-        saverConfig.screensaver = cliScreensaver;
-    } else if (const QString saved = settingsStore.screensaverId(); !saved.isEmpty()) {
-        saverConfig.screensaver = findScreensaver(saved);
-        if (!saverConfig.screensaver) {
-            saverConfig.screensaver = defaultScreensaver();
-            fmt::print(stderr, "Screensaver: unknown saved id {}; using {}\n", saved.toStdString(),
-                       saverConfig.screensaver->id.toStdString());
-        }
+    const QString savedScreensaver = settingsStore.screensaverId();
+    const ScreensaverChoice choice = resolveScreensaver(cliScreensaver, savedScreensaver);
+    saverConfig.screensaver = choice.descriptor;
+    if (choice.unknownSavedId) {
+        fmt::print(stderr, "Screensaver: unknown saved id {}; using {}\n", savedScreensaver.toStdString(),
+                   choice.descriptor->id.toStdString());
     }
     fmt::print("Screensaver selection: {}\n", saverConfig.screensaver->id.toStdString());
     const app::PowerOptions power{.dryRun = smoke || parser.isSet("dry-run"), .failureTest = failureTest};

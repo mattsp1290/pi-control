@@ -1,6 +1,6 @@
 #include "wifi/connect_attempt.h"
 #include "wifi/fake_wifi_backend.h"
-#include "wifi/nm_flags.h"
+#include "wifi/nm_access_points.h"
 #include "wifi/nm_messages.h"
 #include "wifi/nm_wifi_backend.h"
 

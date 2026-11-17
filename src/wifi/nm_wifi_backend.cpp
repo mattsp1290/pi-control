@@ -59,7 +59,7 @@ NmWifiBackend::NmWifiBackend(QDBusConnection bus, QObject* parent)
     connect(&scanQuietTimer_, &QTimer::timeout, this, &NmWifiBackend::finishScan);
     attemptTimer_.setSingleShot(true);
     connect(&attemptTimer_, &QTimer::timeout, this, [this] {
-        if (attempt_) apply(attempt_->timerFired());
+        feed([](ConnectAttempt& attempt) { return attempt.timerFired(); });
     });
     watcher_.setConnection(bus_);
     watcher_.addWatchedService(nm::kService);
@@ -225,7 +225,7 @@ void NmWifiBackend::becomeUnavailable(const QString& detail) {
     profiles_.clear();
     supersededProfiles_.clear();
     fmt::print(stderr, "Wi‑Fi: unavailable: {}\n", detail.toStdString());
-    if (attempt_) apply(attempt_->serviceVanished());
+    feed([](ConnectAttempt& attempt) { return attempt.serviceVanished(); });
     if (scanning_) {
         scanning_ = false;
         scanQuietTimer_.stop();
@@ -361,12 +361,12 @@ void NmWifiBackend::onActiveAccessPointPropertiesChanged(const QString& interfac
 
 void NmWifiBackend::onDeviceStateChanged(uint newState, uint oldState, uint reason) {
     deviceState_ = newState;
-    if (attempt_) apply(attempt_->deviceStateChanged(newState, oldState, reason));
+    feed([&](ConnectAttempt& attempt) { return attempt.deviceStateChanged(newState, oldState, reason); });
     emit statusChanged();
 }
 
 void NmWifiBackend::onActiveStateChanged(uint state, uint reason) {
-    if (attempt_) apply(attempt_->activeStateChanged(state, reason));
+    feed([&](ConnectAttempt& attempt) { return attempt.activeStateChanged(state, reason); });
 }
 
 void NmWifiBackend::onAccessPointAdded(const QDBusObjectPath& path) {
@@ -448,8 +448,7 @@ void NmWifiBackend::requestScan() {
         },
         [this](const QString& errorName) {
             scanning_ = false;
-            const WifiError error = classifyCallError(errorName);
-            emit scanFinished(error == WifiError::NotPermitted ? error : WifiError::Failed);
+            emit scanFinished(classifyRequestError(errorName));
         });
 }
 
@@ -469,10 +468,7 @@ bool NmWifiBackend::connectTo(const WifiNetwork& network, const QString& passwor
     attemptSsid_ = network.ssidBytes;
     if (!available_) {
         startAttempt(false);
-        QTimer::singleShot(0, this, [this] {
-            if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::Activate,
-                                                     "org.freedesktop.DBus.Error.ServiceUnknown"));
-        });
+        QTimer::singleShot(0, this, [this] { feed([](ConnectAttempt& attempt) { return attempt.serviceVanished(); }); });
         emit statusChanged();
         return true;
     }
@@ -480,22 +476,17 @@ bool NmWifiBackend::connectTo(const WifiNetwork& network, const QString& passwor
     if (!saved.empty() && password.isEmpty()) {
         startAttempt(false);
         const QString ap = strongestAccessPoint(accessPoints(), network.ssidBytes);
-        call(
-            nm::buildActivateMessage(saved.front(), devicePath_, ap),
-            [this](const QDBusMessage& reply) {
-                if (attempt_) apply(attempt_->activateReplied(objectPath(reply.arguments().value(0))));
-            },
-            [this](const QString& errorName) {
-                if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::Activate, errorName));
-            });
-    } else if (!saved.empty()) {
+        call(nm::buildActivateMessage(saved.front(), devicePath_, ap),
+             attemptReply([](ConnectAttempt& attempt, const QDBusMessage& reply) {
+                 return attempt.activateReplied(objectPath(reply.arguments().value(0)));
+             }),
+             attemptError(ConnectAttempt::Call::Activate));
+    } else {
         // A new password gets a new profile rather than an edit: re-marshalling
-        // NetworkManager's typed settings loses D-Bus types. The old profiles
+        // NetworkManager's typed settings loses D-Bus types. Any old profiles
         // go only once the new one has joined, so a mistyped retry loses
         // nothing.
         supersededProfiles_ = saved;
-        addAndActivate(network, password);
-    } else {
         addAndActivate(network, password);
     }
     emit statusChanged();
@@ -505,25 +496,39 @@ bool NmWifiBackend::connectTo(const WifiNetwork& network, const QString& passwor
 void NmWifiBackend::startAttempt(bool createdProfile) {
     const QString previous = deviceState_ == device_state::kActivated ? activeProfilePath_ : QString();
     attempt_.emplace(createdProfile, previous, deviceState_);
+    ++attemptSerial_;
+}
+
+void NmWifiBackend::feed(const AttemptStep& step) {
+    if (attempt_) apply(step(*attempt_));
+}
+
+NmWifiBackend::ReplyHandler
+NmWifiBackend::attemptReply(std::function<ConnectActions(ConnectAttempt&, const QDBusMessage&)> step) {
+    return [this, serial = attemptSerial_, step = std::move(step)](const QDBusMessage& reply) {
+        if (attempt_ && serial == attemptSerial_) apply(step(*attempt_, reply));
+    };
+}
+
+NmWifiBackend::ErrorHandler NmWifiBackend::attemptError(ConnectAttempt::Call call) {
+    return [this, serial = attemptSerial_, call](const QString& errorName) {
+        if (attempt_ && serial == attemptSerial_) apply(attempt_->callFailed(call, errorName));
+    };
 }
 
 void NmWifiBackend::addAndActivate(const WifiNetwork& network, const QString& password) {
-    if (!attempt_) startAttempt(true);
+    startAttempt(true);
     const QString ap = strongestAccessPoint(accessPoints(), network.ssidBytes);
-    call(
-        nm::buildAddAndActivateMessage(network.ssidBytes, network.security, password, devicePath_, ap),
-        [this](const QDBusMessage& reply) {
-            if (!attempt_) return;
-            apply(attempt_->addReplied(objectPath(reply.arguments().value(0)),
-                                       objectPath(reply.arguments().value(1))));
-        },
-        [this](const QString& errorName) {
-            if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::AddAndActivate, errorName));
-        });
+    call(nm::buildAddAndActivateMessage(network.ssidBytes, network.security, password, devicePath_, ap),
+         attemptReply([](ConnectAttempt& attempt, const QDBusMessage& reply) {
+             return attempt.addReplied(objectPath(reply.arguments().value(0)), objectPath(reply.arguments().value(1)));
+         }),
+         attemptError(ConnectAttempt::Call::AddAndActivate));
 }
 
 void NmWifiBackend::adoptAttemptForTesting(ConnectAttempt attempt, const QByteArray& ssidBytes) {
     attempt_.emplace(std::move(attempt));
+    ++attemptSerial_;
     attemptSsid_ = ssidBytes;
 }
 
@@ -536,24 +541,16 @@ void NmWifiBackend::apply(const ConnectActions& actions) {
             subscribe(action.path, nm::kActive, "StateChanged", SLOT(onActiveStateChanged(uint, uint)));
             break;
         case Kind::ReadActiveState:
-            call(
-                nm::buildGetPropertyMessage(action.path, nm::kActive, "State"),
-                [this](const QDBusMessage& reply) {
-                    if (attempt_) apply(attempt_->activeStateRead(unwrap(reply.arguments().value(0)).toUInt()));
-                },
-                [this](const QString& errorName) {
-                    if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::ReadActiveState, errorName));
-                });
+            call(nm::buildGetPropertyMessage(action.path, nm::kActive, "State"),
+                 attemptReply([](ConnectAttempt& attempt, const QDBusMessage& reply) {
+                     return attempt.activeStateRead(unwrap(reply.arguments().value(0)).toUInt());
+                 }),
+                 attemptError(ConnectAttempt::Call::ReadActiveState));
             break;
         case Kind::SaveProfile:
-            call(
-                nm::buildSaveMessage(action.path),
-                [this](const QDBusMessage&) {
-                    if (attempt_) apply(attempt_->saveReplied());
-                },
-                [this](const QString& errorName) {
-                    if (attempt_) apply(attempt_->callFailed(ConnectAttempt::Call::Save, errorName));
-                });
+            call(nm::buildSaveMessage(action.path),
+                 attemptReply([](ConnectAttempt& attempt, const QDBusMessage&) { return attempt.saveReplied(); }),
+                 attemptError(ConnectAttempt::Call::Save));
             break;
         case Kind::DeleteProfile:
             call(nm::buildDeleteMessage(action.path), {});
@@ -621,10 +618,7 @@ void NmWifiBackend::forget(const QByteArray& ssidBytes) {
                 done();
             },
             [progress, done](const QString& errorName) {
-                if (progress->error == WifiError::None) {
-                    const WifiError error = classifyCallError(errorName);
-                    progress->error = error == WifiError::NotPermitted ? error : WifiError::Failed;
-                }
+                if (progress->error == WifiError::None) progress->error = classifyRequestError(errorName);
                 done();
             });
     }

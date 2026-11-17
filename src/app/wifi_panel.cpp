@@ -235,16 +235,9 @@ WifiPanel::WifiPanel(wifi::WifiBackend& backend, AppShell& shell, screensaver::S
             unavailable_ = unavailable;
             rebuildRows();
         }
-        if (!backend_.isConnecting()) connectingSsid_.clear();
+        if (!backend_.isConnecting()) join_.reset();
         refreshRowStates();
-        // A password submitted while the previous attempt was still settling.
-        if (!backend_.isConnecting() && passwordView_ && passwordView_->isConnecting() && !viewAwaitsResult_
-            && shell_.currentTask() == passwordView_) {
-            if (backend_.connectTo(passwordView_->network(), passwordView_->field()->text())) {
-                viewAwaitsResult_ = true;
-                connectingSsid_ = passwordView_->network().ssidBytes;
-            }
-        }
+        resubmitDeferredPassword();
     });
     connect(&backend_, &wifi::WifiBackend::networksChanged, this, &WifiPanel::rebuildRows);
     connect(&backend_, &wifi::WifiBackend::scanFinished, this, &WifiPanel::scanFinished);
@@ -323,7 +316,8 @@ void WifiPanel::rebuildRows() {
 
 void WifiPanel::refreshRowStates() {
     const bool connecting = backend_.isConnecting();
-    for (NetworkRow* row : rows()) row->setConnecting(connecting, row->network().ssidBytes == connectingSsid_);
+    const QByteArray target = join_ ? join_->ssidBytes : QByteArray();
+    for (NetworkRow* row : rows()) row->setConnecting(connecting, row->network().ssidBytes == target);
 }
 
 void WifiPanel::updateEmptyHint() {
@@ -381,23 +375,34 @@ void WifiPanel::tapped(const wifi::WifiNetwork& network) {
         openPasswordView(network);
         return;
     }
-    if (!backend_.connectTo(network, {})) return;
-    connectingSsid_ = network.ssidBytes;
-    viewAwaitsResult_ = false;
-    for (NetworkRow* row : rows()) row->setConnecting(true, row->network().ssidBytes == connectingSsid_);
+    startJoin(network, {}, false);
+}
+
+bool WifiPanel::startJoin(const wifi::WifiNetwork& network, const QString& password, bool fromView) {
+    if (!backend_.connectTo(network, password)) return false;
+    join_ = Join{network.ssidBytes, fromView};
+    refreshRowStates();
+    return true;
+}
+
+void WifiPanel::resubmitDeferredPassword() {
+    if (backend_.isConnecting() || join_ || !passwordView_ || !passwordView_->isConnecting()
+        || shell_.currentTask() != passwordView_) {
+        return;
+    }
+    startJoin(passwordView_->network(), passwordView_->password(), true);
 }
 
 void WifiPanel::openPasswordView(const wifi::WifiNetwork& network, const QString& message) {
     if (!passwordView_) {
         passwordView_ = new PasswordView;
         connect(passwordView_, &PasswordView::submitted, this, [this](const QString& password) {
-            if (!backend_.connectTo(passwordView_->network(), password)) return; // Retried on statusChanged.
-            viewAwaitsResult_ = true;
-            connectingSsid_ = passwordView_->network().ssidBytes;
+            // While another attempt settles, resubmitDeferredPassword() sends it later.
+            startJoin(passwordView_->network(), password, true);
         });
         connect(passwordView_, &PasswordView::cancelled, this, [this] {
             // An attempt in flight continues; its result shows on the status line.
-            viewAwaitsResult_ = false;
+            if (join_) join_->fromView = false;
             shell_.closeTask();
         });
     }
@@ -416,11 +421,10 @@ void WifiPanel::connectFinished(const QByteArray& ssidBytes, WifiError error) {
         network.ssid = QString::fromUtf8(ssidBytes);
         network.security = WifiSecurity::Personal;
     }
-    const bool fromView = viewAwaitsResult_ && passwordView_ && passwordView_->network().ssidBytes == ssidBytes;
-    viewAwaitsResult_ = false;
+    const bool fromView = join_ && join_->fromView && join_->ssidBytes == ssidBytes && passwordView_;
     // The attempt is over even if NetworkManager is still rejoining the
     // previous network: the row must not keep saying "Connecting…".
-    connectingSsid_.clear();
+    join_.reset();
     refreshRowStates();
     if (fromView) {
         if (error == WifiError::None) {

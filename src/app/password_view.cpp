@@ -133,6 +133,8 @@ void PasswordView::open(const wifi::WifiNetwork& network, const QString& message
     updateState();
 }
 
+QString PasswordView::password() const { return field_->text(); }
+
 void PasswordView::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     field_->setFocus();

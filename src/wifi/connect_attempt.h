@@ -45,6 +45,9 @@ WifiError classifyConnectFailure(std::optional<quint32> deviceReason, std::optio
 
 // The error a failed D-Bus call maps to.
 WifiError classifyCallError(const QString& errorName);
+// The same for a scan or forget request, which reports only NotPermitted
+// or Failed.
+WifiError classifyRequestError(const QString& errorName);
 
 struct ConnectAction {
     enum class Kind {

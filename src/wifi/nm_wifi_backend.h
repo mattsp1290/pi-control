@@ -1,7 +1,7 @@
 #pragma once
 
 #include "wifi/connect_attempt.h"
-#include "wifi/nm_flags.h"
+#include "wifi/nm_access_points.h"
 #include "wifi/wifi_backend.h"
 
 #include <QDBusConnection>
@@ -91,6 +91,12 @@ private:
     QByteArray activeSsid() const;
 
     void startAttempt(bool createdProfile);
+    // Feed the current attempt. The handlers remember the attempt that made
+    // the call, so a late reply never reaches a newer attempt.
+    using AttemptStep = std::function<ConnectActions(ConnectAttempt&)>;
+    void feed(const AttemptStep& step);
+    ReplyHandler attemptReply(std::function<ConnectActions(ConnectAttempt&, const QDBusMessage&)> step);
+    ErrorHandler attemptError(ConnectAttempt::Call call);
     void addAndActivate(const WifiNetwork& network, const QString& password);
     void apply(const ConnectActions& actions);
 
@@ -117,6 +123,7 @@ private:
     QTimer scanQuietTimer_;
 
     std::optional<ConnectAttempt> attempt_;
+    quint64 attemptSerial_ = 0; // Identifies attempt_ for late replies.
     QByteArray attemptSsid_;
     // Saved profiles a new password replaces; deleted once the new one works.
     std::vector<QString> supersededProfiles_;

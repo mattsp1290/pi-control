@@ -17,6 +17,17 @@ add_library(pi_control_screensaver STATIC
 target_include_directories(pi_control_screensaver PUBLIC src)
 target_link_libraries(pi_control_screensaver PUBLIC Qt6::Widgets PRIVATE Qt6::Concurrent fmt::fmt)
 target_compile_options(pi_control_screensaver PRIVATE -Wall -Wextra -Wpedantic)
+# Wi-Fi over NetworkManager; no widgets.
+add_library(pi_control_wifi STATIC
+  src/wifi/connect_attempt.cpp
+  src/wifi/fake_wifi_backend.cpp
+  src/wifi/nm_access_points.cpp
+  src/wifi/nm_messages.cpp
+  src/wifi/nm_wifi_backend.cpp
+  src/wifi/wifi_backend.cpp)
+target_include_directories(pi_control_wifi PUBLIC src)
+target_link_libraries(pi_control_wifi PUBLIC Qt6::Core Qt6::DBus PRIVATE fmt::fmt)
+target_compile_options(pi_control_wifi PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pi_control_app STATIC
   src/app/app_shell.cpp
   src/app/elided_label.cpp
@@ -32,15 +43,10 @@ add_library(pi_control_app STATIC
   src/app/wifi_panel.cpp
   src/keyboard/on_screen_keyboard.cpp
   src/system/ip_addresses.cpp
-  src/system/system_stats.cpp
-  src/wifi/connect_attempt.cpp
-  src/wifi/fake_wifi_backend.cpp
-  src/wifi/nm_flags.cpp
-  src/wifi/nm_messages.cpp
-  src/wifi/nm_wifi_backend.cpp
-  src/wifi/wifi_backend.h)
+  src/system/system_stats.cpp)
 target_include_directories(pi_control_app PUBLIC src)
-target_link_libraries(pi_control_app PUBLIC pi_control_screensaver Qt6::Widgets Qt6::DBus Qt6::Network PRIVATE fmt::fmt)
+target_link_libraries(pi_control_app PUBLIC pi_control_screensaver pi_control_wifi Qt6::Widgets Qt6::DBus Qt6::Network
+  PRIVATE fmt::fmt)
 target_compile_options(pi_control_app PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(pi-control src/main.cpp)
 target_link_libraries(pi-control PRIVATE pi_control_app fmt::fmt)
@@ -64,8 +70,12 @@ if(BUILD_TESTING)
   add_test(NAME screensaver-controller COMMAND screensaver-controller-tests)
   set_tests_properties(screensaver-controller PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
   function(pi_control_qt_test name source)
+    set(library pi_control_app)
+    if(ARGC GREATER 2)
+      set(library ${ARGV2})
+    endif()
     add_executable(${name}-tests ${source})
-    target_link_libraries(${name}-tests PRIVATE pi_control_app Qt6::Test)
+    target_link_libraries(${name}-tests PRIVATE ${library} Qt6::Test)
     target_compile_options(${name}-tests PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME ${name} COMMAND ${name}-tests)
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
@@ -74,7 +84,7 @@ if(BUILD_TESTING)
   pi_control_qt_test(settings-page tests/test_settings_page.cpp)
   pi_control_qt_test(system-stats tests/test_system_stats.cpp)
   pi_control_qt_test(home-page tests/test_home_page.cpp)
-  pi_control_qt_test(wifi-backend tests/test_wifi_backend.cpp)
+  pi_control_qt_test(wifi-backend tests/test_wifi_backend.cpp pi_control_wifi)
   pi_control_qt_test(settings-store tests/test_settings_store.cpp)
   pi_control_qt_test(keyboard tests/test_on_screen_keyboard.cpp)
   pi_control_qt_test(wifi-panel tests/test_wifi_panel.cpp)

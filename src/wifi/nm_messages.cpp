@@ -1,6 +1,6 @@
 #include "wifi/nm_messages.h"
 
-#include "wifi/nm_flags.h"
+#include "wifi/nm_access_points.h"
 
 #include <QDBusMetaType>
 #include <QDBusObjectPath>

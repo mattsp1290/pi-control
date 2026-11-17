@@ -94,15 +94,26 @@ QString ScreensaverController::screensaverId() const {
     return config_.screensaver ? config_.screensaver->id : QString();
 }
 
+bool ScreensaverController::canShow() const { return view_ && !inhibited_ && watching() && enabled(); }
+
 void ScreensaverController::preview() {
-    if (!view_ || inhibited_ || !watching() || !enabled()) return;
+    if (!canShow()) return;
     if (anythingHeld()) {
         // Like an idle activation: covering a held press would swallow its
         // release, so show once everything is released.
         previewPending_ = true;
         return;
     }
-    show("preview");
+    show(Trigger::Preview);
+}
+
+void ScreensaverController::showPendingPreviewIfReleased() {
+    if (!previewPending_ || anythingHeld()) return;
+    previewPending_ = false;
+    // After the release has reached its widget.
+    QTimer::singleShot(0, this, [this] {
+        if (canShow()) show(Trigger::Preview);
+    });
 }
 
 void ScreensaverController::restartIdleTimer() {
@@ -115,7 +126,7 @@ bool ScreensaverController::anythingHeld() const {
 }
 
 void ScreensaverController::activate() {
-    if (!view_ || inhibited_ || !watching() || !enabled()) return;
+    if (!canShow()) return;
     // A press resting on the screen sends no events. Covering it would swallow
     // its release and leave the widget under it pressed, so wait for release,
     // up to a cap in case the release was lost.
@@ -124,20 +135,23 @@ void ScreensaverController::activate() {
         idleTimer_.start();
         return;
     }
-    show(nullptr);
+    show(Trigger::Idle);
 }
 
-void ScreensaverController::show(const char* reason) {
+void ScreensaverController::show(Trigger trigger) {
     const auto* descriptor = config_.screensaver;
     const quint32 seed = config_.random();
     idleTimer_.stop();
     previewPending_ = false;
     state_ = State::Active;
     activeId_ = descriptor->id;
-    if (reason) {
-        fmt::print(stderr, "Screensaver: {} {}\n", activeId_.toStdString(), reason);
-    } else {
+    switch (trigger) {
+    case Trigger::Idle:
         fmt::print(stderr, "Screensaver: {} after {} ms idle\n", activeId_.toStdString(), sinceActivity_.elapsed());
+        break;
+    case Trigger::Preview:
+        fmt::print(stderr, "Screensaver: {} preview\n", activeId_.toStdString());
+        break;
     }
     view_->activate(descriptor->id, descriptor->create(), seed);
     emit activated(activeId_);
@@ -268,13 +282,7 @@ bool ScreensaverController::eventFilter(QObject* watched, QEvent* event) {
             trackHeldInput(event);
             if (!wasHeld && anythingHeld()) heldSince_.start();
             restartIdleTimer();
-            if (previewPending_ && !anythingHeld()) {
-                previewPending_ = false;
-                // After the release has reached its widget.
-                QTimer::singleShot(0, this, [this] {
-                    if (view_ && !inhibited_ && watching() && enabled()) show("preview");
-                });
-            }
+            showPendingPreviewIfReleased();
         }
         return false;
     case State::Active:

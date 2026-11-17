@@ -41,6 +41,7 @@ public:
     // Hides the password again (the screensaver started).
     void conceal();
 
+    QString password() const;
     QLineEdit* field() const { return field_; }
     QPushButton* showButton() const { return show_; }
     QPushButton* connectButton() const { return connect_; }

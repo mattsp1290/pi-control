@@ -220,6 +220,19 @@ private slots:
         QCOMPARE(clicked_->count(), 1);
     }
 
+    void resolvesStartupScreensaver() {
+        const auto* water = findScreensaver(u"water");
+        const auto* life = findScreensaver(u"life");
+        QCOMPARE(resolveScreensaver(water, u"life").descriptor, water); // The override wins, unsaved.
+        QCOMPARE(resolveScreensaver(nullptr, u"water").descriptor, water);
+        QCOMPARE(resolveScreensaver(nullptr, u"").descriptor, defaultScreensaver());
+        const ScreensaverChoice unknown = resolveScreensaver(nullptr, u"removed");
+        QCOMPARE(unknown.descriptor, defaultScreensaver());
+        QVERIFY(unknown.unknownSavedId);
+        QVERIFY(!resolveScreensaver(nullptr, u"life").unknownSavedId);
+        QCOMPARE(defaultScreensaver(), life);
+    }
+
     void defaultConfigUsesFifteenSeconds() {
         const ScreensaverControllerConfig config;
         QCOMPARE(config.idleTimeout, kIdleTimeout);

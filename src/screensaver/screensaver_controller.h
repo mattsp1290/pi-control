@@ -79,7 +79,10 @@ protected:
 private:
     void restartIdleTimer();
     void activate();
-    void show(const char* reason);
+    enum class Trigger { Idle, Preview };
+    bool canShow() const;
+    void show(Trigger trigger);
+    void showPendingPreviewIfReleased();
     void wake(QEvent* event);
     void trackHeldInput(QEvent* event);
     void clearHeldInput();
