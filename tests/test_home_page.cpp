@@ -24,25 +24,15 @@ public:
     }
 };
 
-class StatusBackend final : public wifi::WifiBackend {
-public:
-    wifi::WifiStatus value;
-    wifi::WifiStatus status() const override { return value; }
-    void set(wifi::WifiStatus status) {
-        value = std::move(status);
-        emit statusChanged();
-    }
-};
-
 struct HomeFixture : AppFixture {
     HomeFixture() : AppFixture(PowerOptions{.dryRun = true}, {}, makeServices()) {}
     static Services makeServices() {
         Services services;
         services.stats = std::make_unique<ScriptedSampler>();
-        services.wifi = std::make_unique<StatusBackend>();
+        services.wifi = std::make_unique<wifi::FakeWifiBackend>();
         return services;
     }
-    StatusBackend& wifiStatus() const { return static_cast<StatusBackend&>(*wifi); }
+    wifi::FakeWifiBackend& wifiStatus() const { return fakeWifi(); }
     HomePage* home() const { return page<HomePage>(u"home"); }
     QString text(const char* name) const { return home()->findChild<QLabel*>(name)->text(); }
 };
@@ -77,17 +67,17 @@ private slots:
 
     void wifiStates() {
         HomeFixture fixture;
-        fixture.wifiStatus().set({.state = State::Connected, .ssid = "HomeNet", .strength = 72});
+        fixture.wifiStatus().setStatus({.state = State::Connected, .ssid = "HomeNet", .strength = 72});
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  HomeNet"));
         QCOMPARE(fixture.text("wifiStrengthLabel"), QString("72 %"));
         QCOMPARE(fixture.home()->findChild<SignalBars*>()->litBars(), 3);
-        fixture.wifiStatus().set({.state = State::Connecting, .ssid = "HomeNet"});
+        fixture.wifiStatus().setStatus({.state = State::Connecting, .ssid = "HomeNet"});
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  Connecting to HomeNet…"));
-        fixture.wifiStatus().set({.state = State::RadioOff});
+        fixture.wifiStatus().setStatus({.state = State::RadioOff});
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  Off"));
-        fixture.wifiStatus().set({.state = State::Disconnected});
+        fixture.wifiStatus().setStatus({.state = State::Disconnected});
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  Not connected"));
-        fixture.wifiStatus().set({.state = State::Unavailable, .detail = "No Wi‑Fi adapter"});
+        fixture.wifiStatus().setStatus({.state = State::Unavailable, .detail = "No Wi‑Fi adapter"});
         QCOMPARE(fixture.text("wifiLabel"), QString("Wi‑Fi  Unavailable"));
     }
 
@@ -105,7 +95,7 @@ private slots:
         fixture.home()->setAddressSource([] {
             return std::vector<system::InterfaceAddress>{{"wlan0", "192.168.100.123"}, {"eth0", "10.0.0.2"}};
         });
-        fixture.wifiStatus().set({.state = State::Connected, .ssid = "A rather long network name", .strength = 72});
+        fixture.wifiStatus().setStatus({.state = State::Connected, .ssid = "A rather long network name", .strength = 72});
         fixture.shell->show();
         QVERIFY(QTest::qWaitForWindowExposed(fixture.shell.get()));
         fixture.home()->refresh();

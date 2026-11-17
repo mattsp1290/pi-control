@@ -15,7 +15,11 @@
 #include "screensaver/registry.h"
 #include "screensaver/screensaver_controller.h"
 #include "system/system_stats.h"
-#include "wifi/unavailable_wifi_backend.h"
+#include "wifi/fake_wifi_backend.h"
+#include "wifi/nm_wifi_backend.h"
+
+#include <QDBusConnection>
+#include <memory>
 
 using namespace pi_control;
 using namespace pi_control::screensaver;
@@ -36,6 +40,34 @@ app::PowerPanel* openPowerPanel(app::AppShell& shell) {
     return settings->powerPanel();
 }
 
+// Prints every Home value once, after an optional scan. Read-only: it never
+// connects. Exit code 0 unless the requested scan failed.
+void runStatusReport(QApplication& app, app::AppShell& shell, wifi::WifiBackend& backend, bool scan) {
+    auto* home = qobject_cast<app::HomePage*>(shell.page(u"home"));
+    home->refresh();
+    auto report = [&app, home](int exitCode) {
+        home->refresh(); // The second sample has a CPU value.
+        for (const QString& line : home->reportLines()) fmt::print("{}\n", line.toStdString());
+        app.exit(exitCode);
+    };
+    // Give the backend time to read NetworkManager's state.
+    QTimer::singleShot(2000, &shell, [&app, &backend, scan, report] {
+        if (!scan) {
+            report(0);
+            return;
+        }
+        QTimer::singleShot(20000, &app, [report] {
+            fmt::print("Wi‑Fi scan: no result within 20 s\n");
+            report(1);
+        });
+        QObject::connect(&backend, &wifi::WifiBackend::scanFinished, &app, [&backend, report](wifi::WifiError error) {
+            fmt::print("Wi‑Fi scan: {} networks={}\n", wifi::toString(error), backend.networks().size());
+            report(error == wifi::WifiError::None ? 0 : 1);
+        });
+        backend.requestScan();
+    });
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -53,9 +85,13 @@ int main(int argc, char** argv) {
         "screensaver", "Use only this screensaver (still starts after 15 s idle): " + screensaverIds.join(", ") + ".",
         "id");
     parser.addOption(screensaverOption);
+    parser.addOption({"fake-wifi", "Use canned Wi‑Fi networks instead of NetworkManager."});
     QCommandLineOption statusReportOption("status-report");
     statusReportOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(statusReportOption);
+    QCommandLineOption scanOption("scan");
+    scanOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(scanOption);
     parser.process(app);
     ScreensaverControllerConfig saverConfig;
     if (parser.isSet(screensaverOption)) {
@@ -72,20 +108,19 @@ int main(int argc, char** argv) {
     const app::PowerOptions power{.dryRun = smoke || parser.isSet("dry-run"), .failureTest = failureTest};
 
     system::SystemStatsSampler stats;
-    wifi::UnavailableWifiBackend wifiBackend;
+    std::unique_ptr<wifi::WifiBackend> wifiBackend;
+    if (smoke || parser.isSet("fake-wifi")) {
+        wifiBackend.reset(wifi::FakeWifiBackend::withSampleNetworks());
+    } else {
+        wifiBackend = std::make_unique<wifi::NmWifiBackend>(QDBusConnection::systemBus());
+    }
     app::AppShell shell;
     ScreensaverController saverController(shell.screensaverView(), std::move(saverConfig));
-    const app::AppContext context{shell, saverController, power, stats, wifiBackend};
+    const app::AppContext context{shell, saverController, power, stats, *wifiBackend};
     shell.buildTabs(context);
 
     if (parser.isSet(statusReportOption)) {
-        auto* home = qobject_cast<app::HomePage*>(shell.page(u"home"));
-        home->refresh();
-        QTimer::singleShot(2000, &shell, [&app, home] {
-            home->refresh(); // The second sample has a CPU value.
-            for (const QString& line : home->reportLines()) fmt::print("{}\n", line.toStdString());
-            app.exit(0);
-        });
+        runStatusReport(app, shell, *wifiBackend, parser.isSet(scanOption));
         return app.exec();
     }
     shell.showFullScreen();

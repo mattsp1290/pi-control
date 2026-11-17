@@ -4,7 +4,7 @@
 #include "app/app_shell.h"
 #include "screensaver/screensaver_controller.h"
 #include "system/system_stats.h"
-#include "wifi/unavailable_wifi_backend.h"
+#include "wifi/fake_wifi_backend.h"
 
 #include <QTabWidget>
 
@@ -23,7 +23,7 @@ struct AppFixture {
                         Services services = {}) {
         stats = services.stats ? std::move(services.stats)
                                : std::make_unique<pi_control::system::SystemStatsSampler>();
-        wifi = services.wifi ? std::move(services.wifi) : std::make_unique<pi_control::wifi::UnavailableWifiBackend>();
+        wifi = services.wifi ? std::move(services.wifi) : std::unique_ptr<pi_control::wifi::WifiBackend>(pi_control::wifi::FakeWifiBackend::withSampleNetworks());
         shell = std::make_unique<pi_control::app::AppShell>();
         shell->resize(800, 480);
         controller = std::make_unique<pi_control::screensaver::ScreensaverController>(shell->screensaverView(),
@@ -37,6 +37,9 @@ struct AppFixture {
         shell.reset();
     }
 
+    pi_control::wifi::FakeWifiBackend& fakeWifi() const {
+        return *qobject_cast<pi_control::wifi::FakeWifiBackend*>(wifi.get());
+    }
     template <typename Page> Page* page(QStringView id) const { return qobject_cast<Page*>(shell->page(id)); }
     void showTab(QStringView id) const { shell->tabWidget()->setCurrentWidget(shell->page(id)); }
 

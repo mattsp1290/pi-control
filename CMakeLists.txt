@@ -28,6 +28,11 @@ add_library(pi_control_app STATIC
   src/app/tabs.cpp
   src/system/ip_addresses.cpp
   src/system/system_stats.cpp
+  src/wifi/connect_attempt.cpp
+  src/wifi/fake_wifi_backend.cpp
+  src/wifi/nm_flags.cpp
+  src/wifi/nm_messages.cpp
+  src/wifi/nm_wifi_backend.cpp
   src/wifi/wifi_backend.h)
 target_include_directories(pi_control_app PUBLIC src)
 target_link_libraries(pi_control_app PUBLIC pi_control_screensaver Qt6::Widgets Qt6::DBus Qt6::Network PRIVATE fmt::fmt)
@@ -64,6 +69,7 @@ if(BUILD_TESTING)
   pi_control_qt_test(settings-page tests/test_settings_page.cpp)
   pi_control_qt_test(system-stats tests/test_system_stats.cpp)
   pi_control_qt_test(home-page tests/test_home_page.cpp)
+  pi_control_qt_test(wifi-backend tests/test_wifi_backend.cpp)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
