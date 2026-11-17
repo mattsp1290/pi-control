@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 include(cmake/CPM.cmake)
 CPMAddPackage("gh:fmtlib/fmt#11.1.4")
-find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets DBus Concurrent)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets DBus Concurrent Network)
 set(CMAKE_AUTOMOC ON)
 add_library(pi_control_screensaver STATIC
   src/screensaver/life.cpp
@@ -17,8 +17,18 @@ add_library(pi_control_screensaver STATIC
 target_include_directories(pi_control_screensaver PUBLIC src)
 target_link_libraries(pi_control_screensaver PUBLIC Qt6::Widgets PRIVATE Qt6::Concurrent fmt::fmt)
 target_compile_options(pi_control_screensaver PRIVATE -Wall -Wextra -Wpedantic)
+add_library(pi_control_app STATIC
+  src/app/app_shell.cpp
+  src/app/example_page.cpp
+  src/app/home_page.cpp
+  src/app/power_panel.cpp
+  src/app/settings_page.cpp
+  src/app/tabs.cpp)
+target_include_directories(pi_control_app PUBLIC src)
+target_link_libraries(pi_control_app PUBLIC pi_control_screensaver Qt6::Widgets Qt6::DBus Qt6::Network PRIVATE fmt::fmt)
+target_compile_options(pi_control_app PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(pi-control src/main.cpp)
-target_link_libraries(pi-control PRIVATE pi_control_screensaver Qt6::Widgets Qt6::DBus fmt::fmt)
+target_link_libraries(pi-control PRIVATE pi_control_app fmt::fmt)
 target_compile_options(pi-control PRIVATE -Wall -Wextra -Wpedantic)
 include(GNUInstallDirs)
 install(TARGETS pi-control RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -38,6 +48,15 @@ if(BUILD_TESTING)
   target_compile_options(screensaver-controller-tests PRIVATE -Wall -Wextra -Wpedantic)
   add_test(NAME screensaver-controller COMMAND screensaver-controller-tests)
   set_tests_properties(screensaver-controller PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+  function(pi_control_qt_test name source)
+    add_executable(${name}-tests ${source})
+    target_link_libraries(${name}-tests PRIVATE pi_control_app Qt6::Test)
+    target_compile_options(${name}-tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME ${name} COMMAND ${name}-tests)
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
+  endfunction()
+  pi_control_qt_test(app-shell tests/test_app_shell.cpp)
+  pi_control_qt_test(settings-page tests/test_settings_page.cpp)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
