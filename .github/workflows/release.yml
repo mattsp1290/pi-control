@@ -2,6 +2,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  pull_request:
 permissions:
   contents: read
 jobs:
@@ -23,11 +24,13 @@ jobs:
           cd build
           cpack
       - name: Validate release version and generate checksum manifest
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           python3 distribution/manifest.py build/pi-control_*_arm64.deb "$RELEASE_TAG" > build/pi-control-manifest.json
       - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: release
           path: |
@@ -36,6 +39,7 @@ jobs:
             distribution/install.sh
   publish:
     needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

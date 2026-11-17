@@ -15,6 +15,15 @@ const std::vector<ScreensaverDescriptor>& builtinScreensavers() {
     return screensavers;
 }
 
+const ScreensaverDescriptor* defaultScreensaver() { return &builtinScreensavers().front(); }
+
+ScreensaverChoice resolveScreensaver(const ScreensaverDescriptor* override, QStringView savedId) {
+    if (override) return {override};
+    if (savedId.isEmpty()) return {defaultScreensaver()};
+    if (const auto* saved = findScreensaver(savedId)) return {saved};
+    return {defaultScreensaver(), true};
+}
+
 const ScreensaverDescriptor* findScreensaver(QStringView id) {
     for (const auto& descriptor : builtinScreensavers()) {
         if (descriptor.id == id) return &descriptor;

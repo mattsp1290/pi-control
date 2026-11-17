@@ -5,5 +5,8 @@ case $1 in
     if [ -d /run/systemd/system ]; then
       systemctl daemon-reload
     fi
+    if [ "$1" = purge ]; then
+      rm -rf /var/lib/pi-control
+    fi
     ;;
 esac

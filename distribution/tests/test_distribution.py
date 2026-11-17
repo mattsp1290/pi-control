@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -71,7 +72,8 @@ class DistributionTests(unittest.TestCase):
         source = (ROOT / path).read_text()
         for old, new in (("/run/systemd/system", str(self.root / "systemd")),
                          ("/run/lock/pi-control-install.lock", str(self.root / "install.lock")),
-                         ("/etc/systemd/system/pi-control.service", str(self.root / "manual.service"))):
+                         ("/etc/systemd/system/pi-control.service", str(self.root / "manual.service")),
+                         ("/var/lib/pi-control", str(self.root / "state"))):
             source = source.replace(old, new)
         script = self.root / "script.sh"
         script.write_text(source)
@@ -182,6 +184,35 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), self.manifest)
         result = subprocess.run([*command, "v0.2.0"], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
+
+    def test_purge_removes_state_but_remove_keeps_it(self):
+        state = self.root / "state"
+        state.mkdir()
+        (state / "settings.ini").write_text("[screensaver]\nid=water\n")
+        result = self.run_script("distribution/debian/postrm", "remove")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((state / "settings.ini").exists())
+        result = self.run_script("distribution/debian/postrm", "purge")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(state.exists())
+
+    def test_service_has_private_state_directory(self):
+        unit = (ROOT / "deploy/pi-control.service").read_text()
+        self.assertIn("StateDirectory=pi-control\n", unit)
+        self.assertIn("StateDirectoryMode=0700\n", unit)
+
+    def test_polkit_rule_grants_exactly_the_kiosk_actions(self):
+        rules = (ROOT / "deploy/49-pi-control.rules").read_text()
+        actions = set(re.findall(r'action\.id === "([^"]+)"', rules))
+        self.assertEqual(actions, {
+            "org.freedesktop.login1.power-off",
+            "org.freedesktop.login1.power-off-multiple-sessions",
+            "org.freedesktop.NetworkManager.wifi.scan",
+            "org.freedesktop.NetworkManager.network-control",
+            "org.freedesktop.NetworkManager.settings.modify.system",
+        })
+        self.assertNotIn("startsWith", rules)
+        self.assertEqual(rules.count('subject.user === "pi-control"'), rules.count("polkit.addRule"))
 
 
 if __name__ == "__main__":

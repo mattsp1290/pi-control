@@ -1,27 +1,88 @@
 #include <QApplication>
 #include <QCommandLineParser>
-#include <QDBusConnection>
-#include <QDBusMessage>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
 #include <QLabel>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QTimer>
-#include <QVBoxLayout>
-#include <QWidget>
+
 #include <fmt/base.h>
 
+#include "app/app_context.h"
+#include "app/app_shell.h"
+#include "app/home_page.h"
+#include "app/power_panel.h"
+#include "app/settings_page.h"
+#include "app/settings_store.h"
+#include "app/tabs.h"
 #include "screensaver/registry.h"
 #include "screensaver/screensaver_controller.h"
-#include "screensaver/screensaver_view.h"
+#include "system/system_stats.h"
+#include "wifi/fake_wifi_backend.h"
+#include "wifi/nm_wifi_backend.h"
 
+#include <QDBusConnection>
+#include <QTemporaryDir>
+
+#include <memory>
+#include <optional>
+
+using namespace pi_control;
 using namespace pi_control::screensaver;
+
+namespace {
+
+// The tab bar shows exactly the tabs() list, in order.
+bool hasExpectedTabs(const QTabWidget& tabs) {
+    QStringList shown;
+    for (int i = 0; i < tabs.count(); ++i) shown << tabs.tabText(i);
+    QStringList expected;
+    for (const auto& tab : app::tabs()) expected << tab.title;
+    return shown == expected;
+}
+
+// Switches to Settings and presses Shut down the way a tap would, without QTest.
+app::PowerPanel* openPowerPanel(app::AppShell& shell) {
+    auto* settings = qobject_cast<app::SettingsPage*>(shell.page(u"settings"));
+    if (!settings) return nullptr;
+    shell.tabWidget()->setCurrentWidget(settings);
+    return settings->powerPanel();
+}
+
+// Prints every Home value once, after an optional scan. Read-only: it never
+// connects. Exit code 0 unless the requested scan failed.
+void runStatusReport(QApplication& app, app::AppShell& shell, wifi::WifiBackend& backend, bool scan) {
+    auto* home = qobject_cast<app::HomePage*>(shell.page(u"home"));
+    home->refresh();
+    auto report = [&app, home](int exitCode) {
+        home->refresh(); // The second sample has a CPU value.
+        for (const QString& line : home->reportLines()) fmt::print("{}\n", line.toStdString());
+        app.exit(exitCode);
+    };
+    // Give the backend time to read NetworkManager's state.
+    QTimer::singleShot(2000, &shell, [&app, &backend, scan, report] {
+        if (!scan) {
+            report(0);
+            return;
+        }
+        QTimer::singleShot(20000, &app, [report] {
+            fmt::print("Wi‑Fi scan: no result within 20 s\n");
+            report(1);
+        });
+        QObject::connect(&backend, &wifi::WifiBackend::scanFinished, &app, [&backend, report](wifi::WifiError error) {
+            fmt::print("Wi‑Fi scan: {} networks={}\n", wifi::toString(error), backend.networks().size());
+            report(error == wifi::WifiError::None ? 0 : 1);
+        });
+        backend.requestScan();
+    });
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("pi-control");
     QCommandLineParser parser;
-    parser.setApplicationDescription("Raspberry Pi shutdown screen");
+    parser.setApplicationDescription("Raspberry Pi control screen");
     parser.addHelpOption();
     parser.addOption({"dry-run", "Simulate shutdown without powering off."});
     parser.addOption({"smoke-test", "Exercise the real button safely and exit."});
@@ -29,95 +90,96 @@ int main(int argc, char** argv) {
     QStringList screensaverIds;
     for (const auto& descriptor : builtinScreensavers()) screensaverIds << descriptor.id;
     const QCommandLineOption screensaverOption(
-        "screensaver", "Use only this screensaver (still starts after 15 s idle): " + screensaverIds.join(", ") + ".",
+        "screensaver",
+        "Use this screensaver for this run without saving it (still starts after 15 s idle): "
+            + screensaverIds.join(", ") + ".",
         "id");
     parser.addOption(screensaverOption);
+    parser.addOption({"fake-wifi", "Use canned Wi‑Fi networks instead of NetworkManager."});
+    QCommandLineOption statusReportOption("status-report");
+    statusReportOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(statusReportOption);
+    QCommandLineOption settingsFileOption("settings-file", "Settings file to use.", "path");
+    settingsFileOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(settingsFileOption);
+    QCommandLineOption scanOption("scan");
+    scanOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(scanOption);
     parser.process(app);
-    ScreensaverControllerConfig saverConfig;
+    const ScreensaverDescriptor* cliScreensaver = nullptr;
     if (parser.isSet(screensaverOption)) {
         const QString id = parser.value(screensaverOption);
-        const auto* descriptor = findScreensaver(id);
-        if (!descriptor) {
+        cliScreensaver = findScreensaver(id);
+        if (!cliScreensaver) {
             fmt::print(stderr, "Unknown screensaver: {}\n", id.toStdString());
             return 2;
         }
-        saverConfig.candidates = {descriptor};
     }
     const bool failureTest = parser.isSet("smoke-test-failure");
     const bool smoke = parser.isSet("smoke-test") || failureTest;
-    const bool dryRun = smoke || parser.isSet("dry-run");
 
-    QWidget screen;
-    screen.setWindowTitle("Pi Control");
-    screen.setMinimumSize(320, 240);
-    screen.setStyleSheet("QWidget { background: #101820; color: #ffffff; }"
-                         "QLabel { font-size: 22px; }"
-                         "QPushButton { background: #b52d3a; border: 3px solid #ef8e98;"
-                         "border-radius: 18px; padding: 24px; font-size: 32px; }"
-                         "QPushButton:focus { border-color: white; }"
-                         "QPushButton:pressed { background: #86202b; }"
-                         "QPushButton:disabled { background: #555; }");
-    auto* layout = new QVBoxLayout(&screen);
-    auto* status = new QLabel(dryRun ? "Pi Control — dry run" : "Pi Control");
-    status->setAlignment(Qt::AlignCenter);
-    status->setWordWrap(true);
-    auto* button = new QPushButton("Shut down");
-    button->setAccessibleName("Shut down Raspberry Pi");
-    button->setMinimumHeight(110);
-    layout->addStretch();
-    layout->addWidget(status);
-    layout->addSpacing(24);
-    layout->addWidget(button);
-    layout->addStretch();
-    auto* saverView = new ScreensaverView(&screen);
-    ScreensaverController saverController(*saverView, std::move(saverConfig));
-    bool simulated = false;
-    QObject::connect(button, &QPushButton::clicked, &screen, [&] {
-        saverController.setInhibited(true); // No screensaver while a shutdown is pending.
-        button->setEnabled(false);
-        if (dryRun && !failureTest) {
-            simulated = true;
-            status->setText("Dry run: shutdown requested");
-            fmt::print("Dry run: PowerOff(false) was not sent.\n");
-            return;
-        }
-        status->setText("Shutting down…");
-        auto message = QDBusMessage::createMethodCall(
-            "org.freedesktop.login1", "/org/freedesktop/login1",
-            "org.freedesktop.login1.Manager", "PowerOff");
-        message << false; // Never prompt for credentials in a boot kiosk.
-        // An unregistered connection is always disconnected: tests cannot reach logind.
-        const auto bus = failureTest ? QDBusConnection(QStringLiteral("pi-control-test-disconnected"))
-                                     : QDBusConnection::systemBus();
-        auto* watcher = new QDBusPendingCallWatcher(bus.asyncCall(message, 10000), &screen);
-        const auto finished = [=, &app, &saverController](QDBusPendingCallWatcher* call) {
-            const QDBusPendingReply<> reply = *call;
-            if (reply.isError()) {
-                fmt::print(stderr, "Shutdown failed: {}\n", reply.error().message().toStdString());
-                status->setText("Shutdown failed. Check the service journal and try again.");
-                button->setEnabled(true);
-                saverController.setInhibited(false);
-            }
-            if (failureTest) {
-                app.exit(reply.isError() && button->isEnabled()
-                         && status->text().startsWith("Shutdown failed") ? 0 : 1);
-            }
-            call->deleteLater();
-        };
-        if (watcher->isFinished()) {
-            QTimer::singleShot(0, &screen, [=] { finished(watcher); });
-        } else {
-            QObject::connect(watcher, &QDBusPendingCallWatcher::finished, &screen, finished);
-        }
-    });
-    screen.showFullScreen();
-    button->setFocus();
+    // Smoke runs never touch the developer's own settings.
+    std::optional<QTemporaryDir> smokeSettings;
+    QString settingsPath = app::SettingsStore::defaultPath();
+    if (parser.isSet(settingsFileOption)) {
+        settingsPath = parser.value(settingsFileOption);
+    } else if (smoke) {
+        settingsPath = smokeSettings.emplace().filePath("settings.ini");
+    }
+    app::SettingsStore settingsStore(settingsPath);
+    ScreensaverControllerConfig saverConfig;
+    const QString savedScreensaver = settingsStore.screensaverId();
+    const ScreensaverChoice choice = resolveScreensaver(cliScreensaver, savedScreensaver);
+    saverConfig.screensaver = choice.descriptor;
+    if (choice.unknownSavedId) {
+        fmt::print(stderr, "Screensaver: unknown saved id {}; using {}\n", savedScreensaver.toStdString(),
+                   choice.descriptor->id.toStdString());
+    }
+    fmt::print("Screensaver selection: {}\n", saverConfig.screensaver->id.toStdString());
+    const app::PowerOptions power{.dryRun = smoke || parser.isSet("dry-run"), .failureTest = failureTest};
+
+    system::SystemStatsSampler stats;
+    std::unique_ptr<wifi::WifiBackend> wifiBackend;
+    if (smoke || parser.isSet("fake-wifi")) {
+        wifiBackend.reset(wifi::FakeWifiBackend::withSampleNetworks());
+    } else {
+        wifiBackend = std::make_unique<wifi::NmWifiBackend>(QDBusConnection::systemBus());
+    }
+    app::AppShell shell;
+    ScreensaverController saverController(shell.screensaverView(), std::move(saverConfig));
+    const app::AppContext context{shell, saverController, power, stats, *wifiBackend, settingsStore};
+    shell.buildTabs(context);
+
+    if (parser.isSet(statusReportOption)) {
+        runStatusReport(app, shell, *wifiBackend, parser.isSet(scanOption));
+        return app.exec();
+    }
+    shell.showFullScreen();
+
     if (smoke) {
-        QTimer::singleShot(0, &screen, [&] {
+        QTimer::singleShot(0, &shell, [&] {
+            auto* panel = openPowerPanel(shell);
+            if (!panel || !hasExpectedTabs(*shell.tabWidget())) {
+                fmt::print(stderr, "Smoke test: unexpected tabs\n");
+                app.exit(1);
+                return;
+            }
+            QPushButton* button = panel->shutdownButton();
+            if (failureTest) {
+                QObject::connect(panel, &app::PowerPanel::shutdownFailed, &app, [&app, panel] {
+                    app.exit(panel->shutdownButton()->isEnabled()
+                             && panel->statusLabel()->text().startsWith("Shutdown failed") ? 0 : 1);
+                });
+                button->click();
+                return; // Completion is checked by the asynchronous failure signal.
+            }
+            bool simulated = false;
+            const auto observed = QObject::connect(panel, &app::PowerPanel::dryRunCompleted, &app,
+                                                   [&simulated] { simulated = true; });
             button->click();
-            if (failureTest) return; // Completion is checked by the asynchronous callback.
+            QObject::disconnect(observed);
             app.exit(simulated && !button->isEnabled()
-                     && status->text() == "Dry run: shutdown requested" ? 0 : 1);
+                     && panel->statusLabel()->text() == "Dry run: shutdown requested" ? 0 : 1);
         });
     }
     return app.exec();

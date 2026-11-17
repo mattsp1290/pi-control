@@ -1,8 +1,18 @@
-// Only the dedicated kiosk account may request normal host poweroff.
+// The dedicated kiosk account may request normal host poweroff, and may scan
+// for Wi-Fi networks and join, save or forget them through NetworkManager.
 polkit.addRule(function(action, subject) {
     if (subject.user === "pi-control" &&
         (action.id === "org.freedesktop.login1.power-off" ||
          action.id === "org.freedesktop.login1.power-off-multiple-sessions")) {
+        return polkit.Result.YES;
+    }
+});
+
+polkit.addRule(function(action, subject) {
+    if (subject.user === "pi-control" &&
+        (action.id === "org.freedesktop.NetworkManager.wifi.scan" ||
+         action.id === "org.freedesktop.NetworkManager.network-control" ||
+         action.id === "org.freedesktop.NetworkManager.settings.modify.system")) {
         return polkit.Result.YES;
     }
 });

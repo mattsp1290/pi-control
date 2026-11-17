@@ -20,6 +20,18 @@ struct ScreensaverDescriptor {
 // Every built-in screensaver. See docs/screensavers.md to add one.
 const std::vector<ScreensaverDescriptor>& builtinScreensavers();
 
+// The screensaver used when none is chosen: the first built-in.
+const ScreensaverDescriptor* defaultScreensaver();
+
+struct ScreensaverChoice {
+    const ScreensaverDescriptor* descriptor = nullptr;
+    bool unknownSavedId = false; // A saved id named no built-in; the default was used.
+};
+
+// Which screensaver to start with: the command-line override if any, else
+// the saved id if it names a built-in, else the default.
+ScreensaverChoice resolveScreensaver(const ScreensaverDescriptor* override, QStringView savedId);
+
 // The built-in descriptor with this id, or nullptr.
 const ScreensaverDescriptor* findScreensaver(QStringView id);
 

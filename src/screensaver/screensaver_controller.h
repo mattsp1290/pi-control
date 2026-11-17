@@ -10,7 +10,6 @@
 
 #include <chrono>
 #include <functional>
-#include <vector>
 
 namespace pi_control::screensaver {
 
@@ -22,24 +21,20 @@ inline constexpr std::chrono::milliseconds kWakeGuard{250};
 inline constexpr std::chrono::milliseconds kMaxWakeGuard{3000};
 inline constexpr std::chrono::milliseconds kMaxHoldDeferral{60000};
 
-// Uniform choice of a candidate index from one random draw.
-inline std::size_t pickScreensaverIndex(const std::function<quint32()>& random, std::size_t count) {
-    return count == 0 ? 0 : std::size_t(random() % count);
-}
-
 struct ScreensaverControllerConfig {
     std::chrono::milliseconds idleTimeout = kIdleTimeout;
     std::chrono::milliseconds wakeGuard = kWakeGuard;
     std::chrono::milliseconds maxWakeGuard = kMaxWakeGuard;
     // Longest time activation waits for a press that was already held.
     std::chrono::milliseconds maxHoldDeferral = kMaxHoldDeferral;
-    std::vector<const ScreensaverDescriptor*> candidates = allBuiltins();
-    std::function<quint32()> random; // Empty: QRandomGenerator::global().
-
-    static std::vector<const ScreensaverDescriptor*> allBuiltins();
+    // The screensaver every activation shows; null disables the controller.
+    // Must outlive the controller (registry entries do).
+    const ScreensaverDescriptor* screensaver = defaultScreensaver();
+    // Draws each activation's seed. Empty: QRandomGenerator::global().
+    std::function<quint32()> random;
 };
 
-// Shows a random screensaver after idleTimeout without user input. The input
+// Shows the selected screensaver after idleTimeout without user input. The input
 // that dismisses it, and the rest of that gesture, never reach other widgets.
 // Activation waits while a press is held, so covering the screen never
 // swallows the release of a press that a widget already saw.
@@ -60,6 +55,15 @@ public:
     ~ScreensaverController() override;
 
     void setInhibited(bool inhibited);
+    // Used from the next activation on; a running screensaver keeps going.
+    // The controller keeps a pointer: descriptor must outlive it, as
+    // builtinScreensavers() entries do.
+    void setScreensaver(const ScreensaverDescriptor& descriptor);
+    std::chrono::milliseconds idleTimeout() const { return config_.idleTimeout; }
+    QString screensaverId() const;
+    // Shows the selected screensaver now, unless inhibited. Like an idle
+    // activation, it waits for a held press to be released.
+    void preview();
     bool isInhibited() const { return inhibited_; }
     State state() const { return state_; }
     bool isActive() const { return state_ == State::Active; }
@@ -75,13 +79,17 @@ protected:
 private:
     void restartIdleTimer();
     void activate();
+    enum class Trigger { Idle, Preview };
+    bool canShow() const;
+    void show(Trigger trigger);
+    void showPendingPreviewIfReleased();
     void wake(QEvent* event);
     void trackHeldInput(QEvent* event);
     void clearHeldInput();
     void checkWakeGuard();
     void enterWatching(State next); // next is Watching or Draining.
     bool watching() const { return state_ == State::Watching || state_ == State::Draining; }
-    bool enabled() const { return !config_.candidates.empty(); }
+    bool enabled() const { return config_.screensaver != nullptr; }
     bool anythingHeld() const;
     static bool isNewPress(const QEvent* event);
 
@@ -89,6 +97,7 @@ private:
     ScreensaverControllerConfig config_;
     State state_ = State::Watching;
     bool inhibited_ = false;
+    bool previewPending_ = false; // preview() waits for a held press to end.
     QString activeId_;
     QTimer idleTimer_;
     QTimer guardTimer_;
