@@ -185,6 +185,7 @@ void NmWifiBackend::findWifiDevice(QList<QDBusObjectPath> devices) {
 }
 
 void NmWifiBackend::useDevice(const QString& path) {
+    if (!devicePath_.isEmpty()) return; // DeviceAdded raced the startup lookup.
     devicePath_ = path;
     subscribe(path, nm::kProperties, "PropertiesChanged",
               SLOT(onDevicePropertiesChanged(QString, QVariantMap, QStringList)));
