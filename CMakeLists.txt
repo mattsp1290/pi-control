@@ -19,11 +19,16 @@ target_link_libraries(pi_control_screensaver PUBLIC Qt6::Widgets PRIVATE Qt6::Co
 target_compile_options(pi_control_screensaver PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pi_control_app STATIC
   src/app/app_shell.cpp
+  src/app/elided_label.cpp
   src/app/example_page.cpp
   src/app/home_page.cpp
   src/app/power_panel.cpp
   src/app/settings_page.cpp
-  src/app/tabs.cpp)
+  src/app/signal_bars.cpp
+  src/app/tabs.cpp
+  src/system/ip_addresses.cpp
+  src/system/system_stats.cpp
+  src/wifi/wifi_backend.h)
 target_include_directories(pi_control_app PUBLIC src)
 target_link_libraries(pi_control_app PUBLIC pi_control_screensaver Qt6::Widgets Qt6::DBus Qt6::Network PRIVATE fmt::fmt)
 target_compile_options(pi_control_app PRIVATE -Wall -Wextra -Wpedantic)
@@ -57,6 +62,8 @@ if(BUILD_TESTING)
   endfunction()
   pi_control_qt_test(app-shell tests/test_app_shell.cpp)
   pi_control_qt_test(settings-page tests/test_settings_page.cpp)
+  pi_control_qt_test(system-stats tests/test_system_stats.cpp)
+  pi_control_qt_test(home-page tests/test_home_page.cpp)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
