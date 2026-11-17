@@ -9,7 +9,6 @@
 #include <QVBoxLayout>
 
 #include <memory>
-#include <random>
 
 using namespace pi_control::screensaver;
 using namespace std::chrono_literals;
@@ -41,12 +40,6 @@ const std::vector<ScreensaverDescriptor>& testDescriptors() {
         {"gamma", "Gamma", [] { return std::make_unique<CountingSaver>(); }},
     };
     return descriptors;
-}
-
-std::vector<const ScreensaverDescriptor*> allTestCandidates() {
-    std::vector<const ScreensaverDescriptor*> all;
-    for (const auto& descriptor : testDescriptors()) all.push_back(&descriptor);
-    return all;
 }
 
 // Counts the input events that actually reach a widget.
@@ -95,7 +88,7 @@ private:
         config.idleTimeout = 300ms;
         config.wakeGuard = 100ms;
         config.maxWakeGuard = 3000ms;
-        config.candidates = allTestCandidates();
+        config.screensaver = &testDescriptors()[0];
         return config;
     }
 
@@ -230,7 +223,7 @@ private slots:
     void defaultConfigUsesFifteenSeconds() {
         const ScreensaverControllerConfig config;
         QCOMPARE(config.idleTimeout, kIdleTimeout);
-        QCOMPARE(config.candidates.size(), builtinScreensavers().size());
+        QCOMPARE(config.screensaver, defaultScreensaver());
     }
 
     void activatesAfterIdleTimeout() {
@@ -421,49 +414,97 @@ private slots:
         QVERIFY(!controller_->isActive());
     }
 
-    void emptyCandidatesNeverActivate() {
+    void nullScreensaverDisablesController() {
         auto config = defaultConfig();
-        config.candidates.clear();
+        config.screensaver = nullptr;
         build(std::move(config));
         QTest::qWait(1500);
+        QVERIFY(!controller_->isActive());
+        controller_->preview();
         QVERIFY(!controller_->isActive());
         click();
         QCOMPARE(clicked_->count(), 1);
     }
 
-    void selectionUsesInjectedRandom() {
+    void selectedScreensaverAlwaysChosen() {
         auto config = defaultConfig();
-        script_ = {2, 11, 0, 12};
-        config.random = [this] { return script_[scriptPosition_++ % script_.size()]; };
+        config.screensaver = &testDescriptors()[1];
         build(std::move(config));
-        QSignalSpy activated(controller_.get(), &ScreensaverController::activated);
-        waitUntilActive();
-        QCOMPARE(controller_->activeScreensaverId(), QString("gamma"));
-        click();
-        waitUntilWatching();
-        waitUntilActive();
-        QCOMPARE(controller_->activeScreensaverId(), QString("alpha"));
-        QCOMPARE(activated.count(), 2);
-    }
-
-    void selectionIsUniform() {
-        std::mt19937 generator(12345);
-        const std::function<quint32()> random = [&] { return quint32(generator()); };
-        int counts[3] = {};
-        for (int i = 0; i < 300; ++i) ++counts[pickScreensaverIndex(random, 3)];
-        for (const int count : counts) QVERIFY2(count >= 60, qPrintable(QString::number(count)));
-    }
-
-    void pinnedCandidateAlwaysChosen() {
-        auto config = defaultConfig();
-        config.candidates = {&testDescriptors()[1]};
-        build(std::move(config));
+        QCOMPARE(controller_->screensaverId(), QString("beta"));
         for (int i = 0; i < 5; ++i) {
             waitUntilActive();
             QCOMPARE(controller_->activeScreensaverId(), QString("beta"));
             click();
             waitUntilWatching();
         }
+    }
+
+    void seedStillComesFromRandom() {
+        auto config = defaultConfig();
+        script_ = {7};
+        config.random = [this] { return script_[scriptPosition_++ % script_.size()]; };
+        build(std::move(config));
+        waitUntilActive();
+        QCOMPARE(scriptPosition_, std::size_t(1)); // One draw per activation: the seed.
+    }
+
+    void setScreensaverWhileWatching() {
+        build(defaultConfig());
+        controller_->setScreensaver(testDescriptors()[2]);
+        QCOMPARE(controller_->screensaverId(), QString("gamma"));
+        waitUntilActive();
+        QCOMPARE(controller_->activeScreensaverId(), QString("gamma"));
+    }
+
+    void setScreensaverWhileActiveWaitsForNextActivation() {
+        build(defaultConfig());
+        waitUntilActive();
+        QCOMPARE(controller_->activeScreensaverId(), QString("alpha"));
+        controller_->setScreensaver(testDescriptors()[1]);
+        QTest::qWait(100);
+        QVERIFY(controller_->isActive());
+        QCOMPARE(controller_->activeScreensaverId(), QString("alpha"));
+        click();
+        waitUntilWatching();
+        waitUntilActive();
+        QCOMPARE(controller_->activeScreensaverId(), QString("beta"));
+    }
+
+    void previewActivatesImmediately() {
+        auto config = defaultConfig();
+        config.idleTimeout = 60s;
+        build(std::move(config));
+        QSignalSpy activated(controller_.get(), &ScreensaverController::activated);
+        controller_->preview();
+        QVERIFY(controller_->isActive());
+        QCOMPARE(activated.count(), 1);
+        // The tap that dismisses a preview never reaches the button below.
+        click();
+        QCOMPARE(clicked_->count(), 0);
+        QVERIFY(!controller_->isActive());
+    }
+
+    void previewWhileInhibitedDoesNothing() {
+        auto config = defaultConfig();
+        config.idleTimeout = 60s;
+        build(std::move(config));
+        controller_->setInhibited(true);
+        controller_->preview();
+        QVERIFY(!controller_->isActive());
+    }
+
+    void previewWaitsForHeldPress() {
+        auto config = defaultConfig();
+        config.idleTimeout = 60s;
+        build(std::move(config));
+        touchPress();
+        controller_->preview();
+        QTest::qWait(100);
+        QVERIFY(!controller_->isActive());
+        touchRelease();
+        QTRY_VERIFY_WITH_TIMEOUT(controller_->isActive(), 1000);
+        // The press and its release went to the button before the preview.
+        QCOMPARE(clicked_->count(), 1);
     }
 
     void noPaintAfterDeactivate() {

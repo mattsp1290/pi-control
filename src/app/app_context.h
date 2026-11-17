@@ -15,6 +15,7 @@ class WifiBackend;
 namespace pi_control::app {
 
 class AppShell;
+class SettingsStore;
 
 // Non-owning references to the services pages share. main() owns them all and
 // keeps them alive for the life of the shell.
@@ -24,6 +25,7 @@ struct AppContext {
     PowerOptions power;
     system::SystemStatsSampler& stats;
     wifi::WifiBackend& wifi;
+    SettingsStore& settings;
 };
 
 } // namespace pi_control::app

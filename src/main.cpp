@@ -12,6 +12,7 @@
 #include "app/home_page.h"
 #include "app/power_panel.h"
 #include "app/settings_page.h"
+#include "app/settings_store.h"
 #include "screensaver/registry.h"
 #include "screensaver/screensaver_controller.h"
 #include "system/system_stats.h"
@@ -19,6 +20,8 @@
 #include "wifi/nm_wifi_backend.h"
 
 #include <QDBusConnection>
+#include <QTemporaryDir>
+
 #include <memory>
 
 using namespace pi_control;
@@ -82,29 +85,52 @@ int main(int argc, char** argv) {
     QStringList screensaverIds;
     for (const auto& descriptor : builtinScreensavers()) screensaverIds << descriptor.id;
     const QCommandLineOption screensaverOption(
-        "screensaver", "Use only this screensaver (still starts after 15 s idle): " + screensaverIds.join(", ") + ".",
+        "screensaver",
+        "Use this screensaver for this run without saving it (still starts after 15 s idle): "
+            + screensaverIds.join(", ") + ".",
         "id");
     parser.addOption(screensaverOption);
     parser.addOption({"fake-wifi", "Use canned Wi‑Fi networks instead of NetworkManager."});
     QCommandLineOption statusReportOption("status-report");
     statusReportOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(statusReportOption);
+    QCommandLineOption settingsFileOption("settings-file", "Settings file to use.", "path");
+    settingsFileOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(settingsFileOption);
     QCommandLineOption scanOption("scan");
     scanOption.setFlags(QCommandLineOption::HiddenFromHelp);
     parser.addOption(scanOption);
     parser.process(app);
-    ScreensaverControllerConfig saverConfig;
+    const ScreensaverDescriptor* cliScreensaver = nullptr;
     if (parser.isSet(screensaverOption)) {
         const QString id = parser.value(screensaverOption);
-        const auto* descriptor = findScreensaver(id);
-        if (!descriptor) {
+        cliScreensaver = findScreensaver(id);
+        if (!cliScreensaver) {
             fmt::print(stderr, "Unknown screensaver: {}\n", id.toStdString());
             return 2;
         }
-        saverConfig.candidates = {descriptor};
     }
     const bool failureTest = parser.isSet("smoke-test-failure");
     const bool smoke = parser.isSet("smoke-test") || failureTest;
+
+    // Smoke runs never touch the developer's own settings.
+    QTemporaryDir smokeSettings;
+    const QString settingsPath = parser.isSet(settingsFileOption) ? parser.value(settingsFileOption)
+                                 : smoke                          ? smokeSettings.filePath("settings.ini")
+                                                                  : app::SettingsStore::defaultPath();
+    app::SettingsStore settingsStore(settingsPath);
+    ScreensaverControllerConfig saverConfig;
+    if (cliScreensaver) {
+        saverConfig.screensaver = cliScreensaver;
+    } else if (const QString saved = settingsStore.screensaverId(); !saved.isEmpty()) {
+        saverConfig.screensaver = findScreensaver(saved);
+        if (!saverConfig.screensaver) {
+            saverConfig.screensaver = defaultScreensaver();
+            fmt::print(stderr, "Screensaver: unknown saved id {}; using {}\n", saved.toStdString(),
+                       saverConfig.screensaver->id.toStdString());
+        }
+    }
+    fmt::print("Screensaver selection: {}\n", saverConfig.screensaver->id.toStdString());
     const app::PowerOptions power{.dryRun = smoke || parser.isSet("dry-run"), .failureTest = failureTest};
 
     system::SystemStatsSampler stats;
@@ -116,7 +142,7 @@ int main(int argc, char** argv) {
     }
     app::AppShell shell;
     ScreensaverController saverController(shell.screensaverView(), std::move(saverConfig));
-    const app::AppContext context{shell, saverController, power, stats, *wifiBackend};
+    const app::AppContext context{shell, saverController, power, stats, *wifiBackend, settingsStore};
     shell.buildTabs(context);
 
     if (parser.isSet(statusReportOption)) {

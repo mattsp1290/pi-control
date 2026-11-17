@@ -15,6 +15,8 @@ const std::vector<ScreensaverDescriptor>& builtinScreensavers() {
     return screensavers;
 }
 
+const ScreensaverDescriptor* defaultScreensaver() { return &builtinScreensavers().front(); }
+
 const ScreensaverDescriptor* findScreensaver(QStringView id) {
     for (const auto& descriptor : builtinScreensavers()) {
         if (descriptor.id == id) return &descriptor;

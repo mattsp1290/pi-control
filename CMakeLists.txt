@@ -23,7 +23,9 @@ add_library(pi_control_app STATIC
   src/app/example_page.cpp
   src/app/home_page.cpp
   src/app/power_panel.cpp
+  src/app/screensaver_panel.cpp
   src/app/settings_page.cpp
+  src/app/settings_store.cpp
   src/app/signal_bars.cpp
   src/app/tabs.cpp
   src/system/ip_addresses.cpp
@@ -70,6 +72,7 @@ if(BUILD_TESTING)
   pi_control_qt_test(system-stats tests/test_system_stats.cpp)
   pi_control_qt_test(home-page tests/test_home_page.cpp)
   pi_control_qt_test(wifi-backend tests/test_wifi_backend.cpp)
+  pi_control_qt_test(settings-store tests/test_settings_store.cpp)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
@@ -81,6 +84,21 @@ if(BUILD_TESTING)
     PASS_REGULAR_EXPRESSION "Unknown screensaver: nope" TIMEOUT 15)
   add_test(NAME accept-screensaver COMMAND pi-control --smoke-test --screensaver life)
   set_tests_properties(accept-screensaver PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/persisted-screensaver.ini "[screensaver]\nid=water\n")
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/persisted-screensaver-life.ini "[screensaver]\nid=life\n")
+  add_test(NAME persisted-screensaver COMMAND ${CMAKE_COMMAND}
+    "-DCMD=$<TARGET_FILE:pi-control>"
+    "-DSETTINGS=${CMAKE_CURRENT_BINARY_DIR}/persisted-screensaver.ini"
+    "-DEXPECT=Screensaver selection: water"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_and_expect.cmake)
+  add_test(NAME persisted-screensaver-negative COMMAND ${CMAKE_COMMAND}
+    "-DCMD=$<TARGET_FILE:pi-control>"
+    "-DSETTINGS=${CMAKE_CURRENT_BINARY_DIR}/persisted-screensaver-life.ini"
+    "-DEXPECT=Screensaver selection: water"
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_and_expect.cmake)
+  set_tests_properties(persisted-screensaver persisted-screensaver-negative PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
+  set_tests_properties(persisted-screensaver-negative PROPERTIES WILL_FAIL TRUE)
 endif()
 
 option(PI_CONTROL_PACKAGE "Build a Debian deployment package" OFF)
