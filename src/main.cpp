@@ -149,9 +149,20 @@ int main(int argc, char** argv) {
     } else {
         wifiBackend = std::make_unique<wifi::NmWifiBackend>(QDBusConnection::systemBus());
     }
-    update::Updater updater({.current = *update::parseVersion(QStringLiteral(PI_CONTROL_VERSION)),
-                             .dryRun = power.dryRun,
-                             .failureTest = failureTest});
+    const auto version = update::parseVersion(QStringLiteral(PI_CONTROL_VERSION));
+    if (!version) {
+        fmt::print(stderr, "Build version {} is not X.Y.Z\n", PI_CONTROL_VERSION);
+        return 1;
+    }
+    std::unique_ptr<update::UpdateStarter> updateStarter;
+    if (!power.dryRun || failureTest) {
+        // An unregistered connection is always disconnected: tests cannot reach systemd.
+        updateStarter = std::make_unique<update::SystemdUpdateStarter>(
+            failureTest ? QDBusConnection(QStringLiteral("pi-control-test-disconnected"))
+                        : QDBusConnection::systemBus());
+    }
+    update::Updater updater({.current = *version, .dryRun = power.dryRun && !failureTest},
+                            std::move(updateStarter));
     app::AppShell shell;
     ScreensaverController saverController(shell.screensaverView(), std::move(saverConfig));
     const app::AppContext context{shell, saverController, power, stats, *wifiBackend, settingsStore, updater};

@@ -162,8 +162,10 @@ as root with `PI_CONTROL_INSTALL_UPGRADE_ONLY=1`. In that mode the installer
 does nothing when the latest release is not newer than the installed package,
 and never downgrades. The package upgrade restarts `pi-control.service`, so the
 screen goes blank for a few seconds and comes back on the new version. If the
-update fails, the screen says so and the button works again; the reason is in
-`journalctl -u pi-control-update`.
+update fails, or reports nothing within 21 minutes, the screen says so and the
+button works again; the reason is in `journalctl -u pi-control-update`. While
+the update installs, Shut down is disabled and the unit holds a logind
+shutdown inhibitor, so a poweroff cannot interrupt apt partway through.
 
 The kiosk account cannot pass anything to the updater: the polkit rule lets it
 *start* exactly `pi-control-update.service` and nothing else, and the unit only

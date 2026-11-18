@@ -17,7 +17,7 @@ namespace pi_control::app {
 
 PowerPanel::PowerPanel(PowerOptions options, screensaver::ScreensaverController& screensaver, QWidget* parent)
     : QWidget(parent), options_(options), screensaver_(screensaver) {
-    status_ = new QLabel(options_.dryRun ? "Dry run: shutdown is simulated." : "");
+    status_ = new QLabel(idleText());
     status_->setObjectName("powerStatus");
     status_->setWordWrap(true);
     button_ = new QPushButton("Shut down");
@@ -31,9 +31,29 @@ PowerPanel::PowerPanel(PowerOptions options, screensaver::ScreensaverController&
     connect(button_, &QPushButton::clicked, this, &PowerPanel::requestShutdown);
 }
 
+QString PowerPanel::idleText() const { return options_.dryRun ? "Dry run: shutdown is simulated." : ""; }
+
+void PowerPanel::setBlocked(const QString& reason) {
+    if (blocked_ == reason) return;
+    const bool showingBlock = !blocked_.isEmpty() && status_->text() == blocked_;
+    blocked_ = reason;
+    if (!pending_) {
+        if (!reason.isEmpty()) {
+            status_->setText(reason);
+        } else if (showingBlock) {
+            status_->setText(idleText());
+        }
+    }
+    refresh();
+}
+
+void PowerPanel::refresh() { button_->setEnabled(!pending_ && blocked_.isEmpty()); }
+
 void PowerPanel::requestShutdown() {
-    screensaver_.setInhibited(true); // No screensaver while a shutdown is pending.
-    button_->setEnabled(false);
+    if (pending_ || !blocked_.isEmpty()) return;
+    screensaver_.setInhibited(this, true); // No screensaver while a shutdown is pending.
+    pending_ = true;
+    refresh();
     emit shutdownRequested();
     if (options_.dryRun && !options_.failureTest) {
         status_->setText("Dry run: shutdown requested");
@@ -55,8 +75,9 @@ void PowerPanel::requestShutdown() {
             const QString detail = reply.error().message();
             fmt::print(stderr, "Shutdown failed: {}\n", detail.toStdString());
             status_->setText("Shutdown failed. Check the service journal and try again.");
-            button_->setEnabled(true);
-            screensaver_.setInhibited(false);
+            pending_ = false;
+            refresh();
+            screensaver_.setInhibited(this, false);
             emit shutdownFailed(detail);
         }
         call->deleteLater();

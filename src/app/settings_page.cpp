@@ -5,6 +5,7 @@
 #include "app/screensaver_panel.h"
 #include "app/update_panel.h"
 #include "app/wifi_panel.h"
+#include "update/updater.h"
 
 #include <QLabel>
 #include <QScrollArea>
@@ -37,6 +38,14 @@ SettingsPage::SettingsPage(const AppContext& context, QWidget* parent) : QWidget
     addSection("Software update", new UpdatePanel(context.updater, context.screensaver));
     power_ = new PowerPanel(context.power, context.screensaver);
     addSection("Power", power_);
+    // Powering off would stop the updater partway through apt.
+    const auto blockDuringUpdate = [this](update::Updater::State state) {
+        power_->setBlocked(state == update::Updater::State::Installing
+                               ? "Shut down is unavailable while the software update installs."
+                               : QString());
+    };
+    connect(&context.updater, &update::Updater::stateChanged, power_, blockDuringUpdate);
+    blockDuringUpdate(context.updater.state());
 }
 
 void SettingsPage::addSection(const QString& title, QWidget* content) {

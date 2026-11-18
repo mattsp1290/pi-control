@@ -1,4 +1,5 @@
 #include "app_fixture.h"
+#include "fake_update_starter.h"
 #include "release_tree.h"
 
 #include "app/power_panel.h"
@@ -188,7 +189,7 @@ private slots:
         ReleaseTree tree("0.3.0");
         AppFixture::Services services;
         services.updater = std::make_unique<update::Updater>(
-            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true});
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true}, nullptr);
         AppFixture fixture({.dryRun = true}, {}, std::move(services));
         fixture.shell->show();
         QVERIFY(QTest::qWaitForWindowExposed(fixture.shell.get()));
@@ -204,6 +205,12 @@ private slots:
         QVERIFY(!panel->updateButton()->isHidden());
         QCOMPARE(panel->updateButton()->text(), QString("Update to 0.3.0"));
 
+        // A re-check keeps the known release on offer.
+        fixture.updater->check();
+        QVERIFY(!panel->updateButton()->isHidden());
+        QVERIFY(!panel->updateButton()->isEnabled());
+        QTRY_VERIFY(panel->updateButton()->isEnabled());
+
         fixture.page<SettingsPage>(u"settings")->scrollArea()->ensureWidgetVisible(panel->updateButton());
         QTest::mouseClick(panel->updateButton(), Qt::LeftButton);
         QCOMPARE(panel->statusLabel()->text(), QString("Dry run: update to 0.3.0 requested."));
@@ -216,7 +223,7 @@ private slots:
         ReleaseTree tree("0.2.0");
         AppFixture::Services services;
         services.updater = std::make_unique<update::Updater>(
-            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true});
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true}, nullptr);
         AppFixture fixture({.dryRun = true}, {}, std::move(services));
         auto* panel = fixture.page<SettingsPage>(u"settings")->findChild<UpdatePanel*>();
         fixture.updater->check();
@@ -225,22 +232,49 @@ private slots:
         QVERIFY(panel->checkButton()->isEnabled());
     }
 
-    void failedUpdateCanBeRetried() {
+    // Installing blocks Shut down and the screensaver; each panel releases
+    // only its own screensaver inhibition.
+    void updateAndShutdownDoNotReleaseEachOther() {
         ReleaseTree tree("0.3.0");
+        auto starter = std::make_unique<FakeUpdateStarter>();
+        FakeUpdateStarter* fake = starter.get();
         AppFixture::Services services;
-        services.updater = std::make_unique<update::Updater>(update::UpdaterOptions{
-            .current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true, .failureTest = true});
-        AppFixture fixture({.dryRun = true}, {}, std::move(services));
-        auto* panel = fixture.page<SettingsPage>(u"settings")->findChild<UpdatePanel*>();
+        services.updater = std::make_unique<update::Updater>(
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base()}, std::move(starter));
+        AppFixture fixture({.dryRun = true, .failureTest = true}, {}, std::move(services));
+        auto* settings = fixture.page<SettingsPage>(u"settings");
+        auto* panel = settings->findChild<UpdatePanel*>();
+        PowerPanel* power = settings->powerPanel();
         fixture.updater->check();
         QTRY_VERIFY(panel->updateButton()->isEnabled() && !panel->updateButton()->isHidden());
+
+        // A shutdown that fails while the update installs keeps the inhibition.
+        power->shutdownButton()->click();
         panel->updateButton()->click();
-        QCOMPARE(panel->statusLabel()->text(), QString("Updating to 0.3.0… The screen restarts when it's done."));
+        QCOMPARE(fake->starts, 1);
+        QCOMPARE(panel->statusLabel()->text(),
+                 QString("Updating to the latest release (0.3.0 or newer)… The screen restarts when it's done."));
+        QTRY_VERIFY(power->statusLabel()->text().startsWith("Shutdown failed"));
         QVERIFY(fixture.controller->isInhibited());
-        QTRY_COMPARE(panel->statusLabel()->text(),
-                     QString("Update failed. Check journalctl -u pi-control-update and try again."));
+        QVERIFY(!power->shutdownButton()->isEnabled());
+        power->shutdownButton()->click(); // Disabled: no request.
+
+        fake->finish(false, "failed");
+        QCOMPARE(panel->statusLabel()->text(),
+                 QString("Update failed. Check journalctl -u pi-control-update and try again."));
         QVERIFY(panel->updateButton()->isEnabled());
+        QVERIFY(power->shutdownButton()->isEnabled());
         QVERIFY(!fixture.controller->isInhibited());
+
+        // Blocking shows why, and unblocking restores the panel.
+        panel->updateButton()->click();
+        QCOMPARE(power->statusLabel()->text(), QString("Shut down is unavailable while the software update installs."));
+        fake->finish(true);
+        QCOMPARE(panel->statusLabel()->text(),
+                 QString("The installed package is already the latest release. Restart Pi Control to run it."));
+        QVERIFY(panel->updateButton()->isHidden());
+        QCOMPARE(power->statusLabel()->text(), QString("Dry run: shutdown is simulated."));
+        QVERIFY(power->shutdownButton()->isEnabled());
     }
 
     void saveFailureKeepsChoiceForSession() {

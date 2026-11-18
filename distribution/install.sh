@@ -26,7 +26,8 @@ main() {
     command -v "$cmd" >/dev/null || fail "$cmd is required"
   done
   # Serialize downloads and apt operations from concurrent installer runs.
-  exec 9>/run/lock/pi-control-install.lock
+  # Root-only /run, not world-writable /run/lock: no local user can hold it.
+  exec 9>/run/pi-control-install.lock
   flock -n 9 || fail 'another pi-control install is running'
 
   version=${PI_CONTROL_INSTALL_VERSION:-}
@@ -46,6 +47,7 @@ sys.exit(not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\n
   else
     release=latest/download
   fi
+  # Keep in step with UpdaterOptions::releaseBase in src/update/updater.h.
   base=https://github.com/mattsp1290/pi-control/releases
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
@@ -94,9 +96,9 @@ PY
     fail 'remove the old manual /etc/systemd/system/pi-control.service first; see README'
   apt-get update
   if [ -n "${PI_CONTROL_INSTALL_VERSION:-}" ]; then
-    apt-get install -y --reinstall --allow-downgrades "$tmp/$package"
+    apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --reinstall --allow-downgrades "$tmp/$package"
   else
-    apt-get install -y --reinstall "$tmp/$package"
+    apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --reinstall "$tmp/$package"
   fi
   systemctl is-enabled --quiet pi-control.service
   sleep 5

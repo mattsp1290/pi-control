@@ -34,7 +34,6 @@ private:
     QLabel* status_;
     QPushButton* check_;
     QPushButton* update_;
-    bool inhibiting_ = false;
 };
 
 } // namespace pi_control::app

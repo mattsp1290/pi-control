@@ -24,6 +24,8 @@ public:
     PowerPanel(PowerOptions options, screensaver::ScreensaverController& screensaver, QWidget* parent = nullptr);
 
     QPushButton* shutdownButton() const { return button_; }
+    // A non-empty reason disables Shut down and shows why; empty allows it again.
+    void setBlocked(const QString& reason);
     QLabel* statusLabel() const { return status_; }
 
 signals:
@@ -33,11 +35,15 @@ signals:
 
 private:
     void requestShutdown();
+    void refresh();
+    QString idleText() const;
 
     PowerOptions options_;
     screensaver::ScreensaverController& screensaver_;
     QLabel* status_;
     QPushButton* button_;
+    bool pending_ = false; // A shutdown was requested and has not failed.
+    QString blocked_;
 };
 
 } // namespace pi_control::app

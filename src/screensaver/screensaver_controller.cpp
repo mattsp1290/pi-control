@@ -69,11 +69,17 @@ ScreensaverController::~ScreensaverController() {
     if (auto* app = QCoreApplication::instance()) app->removeEventFilter(this);
 }
 
-void ScreensaverController::setInhibited(bool inhibited) {
-    inhibited_ = inhibited;
+void ScreensaverController::setInhibited(const void* owner, bool inhibited) {
+    const bool was = isInhibited();
+    if (inhibited) {
+        inhibitors_.insert(owner);
+    } else {
+        inhibitors_.remove(owner);
+    }
+    if (isInhibited() == was) return;
     previewPending_ = false;
     if (!enabled()) return;
-    if (inhibited) {
+    if (isInhibited()) {
         idleTimer_.stop();
         if (state_ == State::Active) {
             if (view_) view_->deactivate();
@@ -94,7 +100,7 @@ QString ScreensaverController::screensaverId() const {
     return config_.screensaver ? config_.screensaver->id : QString();
 }
 
-bool ScreensaverController::canShow() const { return view_ && !inhibited_ && watching() && enabled(); }
+bool ScreensaverController::canShow() const { return view_ && !isInhibited() && watching() && enabled(); }
 
 void ScreensaverController::preview() {
     if (!canShow()) return;
@@ -118,7 +124,7 @@ void ScreensaverController::showPendingPreviewIfReleased() {
 
 void ScreensaverController::restartIdleTimer() {
     sinceActivity_.start();
-    if (!inhibited_) idleTimer_.start();
+    if (!isInhibited()) idleTimer_.start();
 }
 
 bool ScreensaverController::anythingHeld() const {

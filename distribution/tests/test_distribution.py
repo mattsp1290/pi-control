@@ -82,7 +82,7 @@ class DistributionTests(unittest.TestCase):
     def run_script(self, path, *args, **env):
         source = (ROOT / path).read_text()
         for old, new in (("/run/systemd/system", str(self.root / "systemd")),
-                         ("/run/lock/pi-control-install.lock", str(self.root / "install.lock")),
+                         ("/run/pi-control-install.lock", str(self.root / "install.lock")),
                          ("/etc/systemd/system/pi-control.service", str(self.root / "manual.service")),
                          ("/var/lib/pi-control", str(self.root / "state"))):
             source = source.replace(old, new)
@@ -143,7 +143,8 @@ class DistributionTests(unittest.TestCase):
         unit = (ROOT / "deploy/pi-control-update.service").read_text()
         self.assertIn("Type=oneshot\n", unit)
         self.assertIn("Environment=PI_CONTROL_INSTALL_UPGRADE_ONLY=1\n", unit)
-        self.assertIn("ExecStart=/bin/sh /usr/lib/pi-control/install.sh\n", unit)
+        self.assertIn("ExecStart=/usr/bin/systemd-inhibit --what=shutdown:sleep --mode=block", unit)
+        self.assertIn(" /bin/sh /usr/lib/pi-control/install.sh\n", unit)
         self.assertNotIn("[Install]", unit)
         cmake = (ROOT / "CMakeLists.txt").read_text()
         self.assertIn("install(FILES distribution/install.sh DESTINATION lib/pi-control)", cmake)

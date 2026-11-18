@@ -10,5 +10,8 @@ After=network-online.target
 Type=oneshot
 Environment=PI_CONTROL_INSTALL_UPGRADE_ONLY=1
 Environment=DEBIAN_FRONTEND=noninteractive
-ExecStart=/bin/sh /usr/lib/pi-control/install.sh
+# Hold off shutdown while apt runs. The kiosk account may not override the
+# block, so its Shut down fails cleanly instead of interrupting dpkg.
+ExecStart=/usr/bin/systemd-inhibit --what=shutdown:sleep --mode=block --who=pi-control-update \
+  "--why=Installing a Pi Control update" /bin/sh /usr/lib/pi-control/install.sh
 TimeoutStartSec=20min

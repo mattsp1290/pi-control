@@ -391,7 +391,7 @@ private slots:
 
     void inhibitedNeverActivates() {
         build(defaultConfig());
-        controller_->setInhibited(true);
+        controller_->setInhibited(this, true);
         QTest::qWait(1500);
         QVERIFY(!controller_->isActive());
     }
@@ -399,7 +399,7 @@ private slots:
     void inhibitDismissesActiveSaver() {
         build(defaultConfig());
         waitUntilActive();
-        controller_->setInhibited(true);
+        controller_->setInhibited(this, true);
         QVERIFY(!controller_->isActive());
         QVERIFY(!view_->isVisible());
         QCOMPARE(controller_->state(), State::Watching);
@@ -407,9 +407,9 @@ private slots:
 
     void uninhibitRestartsTimer() {
         build(defaultConfig());
-        controller_->setInhibited(true);
+        controller_->setInhibited(this, true);
         QTest::qWait(500);
-        controller_->setInhibited(false);
+        controller_->setInhibited(this, false);
         QVERIFY(!controller_->isActive());
         waitUntilActive();
     }
@@ -418,7 +418,7 @@ private slots:
         build(defaultConfig());
         waitUntilActive();
         QTest::mousePress(window(), Qt::LeftButton, {}, buttonCenter());
-        controller_->setInhibited(true);
+        controller_->setInhibited(this, true);
         QCOMPARE(controller_->state(), State::WakeGuard);
         QTest::mouseRelease(window(), Qt::LeftButton, {}, buttonCenter());
         QTest::qWait(1000);
@@ -501,7 +501,7 @@ private slots:
         auto config = defaultConfig();
         config.idleTimeout = 60s;
         build(std::move(config));
-        controller_->setInhibited(true);
+        controller_->setInhibited(this, true);
         controller_->preview();
         QVERIFY(!controller_->isActive());
     }

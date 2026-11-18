@@ -58,23 +58,25 @@ void UpdatePanel::refresh() {
     case Updater::State::Installing:
         status_->setText(updater_.isDryRun()
                              ? QString("Dry run: update to %1 requested.").arg(latest)
-                             : QString("Updating to %1… The screen restarts when it's done.").arg(latest));
+                             : QString("Updating to the latest release (%1 or newer)… The screen restarts when "
+                                       "it's done.")
+                                   .arg(latest));
         break;
     case Updater::State::InstallFailed:
         status_->setText("Update failed. Check journalctl -u pi-control-update and try again.");
         break;
+    case Updater::State::NothingInstalled:
+        status_->setText("The installed package is already the latest release. Restart Pi Control to run it.");
+        break;
     }
     const bool installing = state == Updater::State::Installing;
     // No screensaver over an update in progress: its result stays on screen.
-    // Only transitions touch it, so a pending shutdown keeps its inhibition.
-    if (installing != inhibiting_) {
-        inhibiting_ = installing;
-        screensaver_.setInhibited(installing);
-    }
+    screensaver_.setInhibited(this, installing);
     check_->setEnabled(state != Updater::State::Checking && !installing);
-    const bool offered = state == Updater::State::Available || state == Updater::State::InstallFailed || installing;
-    update_->setVisible(offered);
-    update_->setEnabled(!installing);
+    // A release found earlier stays on offer through a re-check.
+    update_->setVisible(installing || updater_.canInstall()
+                        || (state == Updater::State::Checking && updater_.newerKnown()));
+    update_->setEnabled(updater_.canInstall());
     update_->setText(QString("Update to %1").arg(latest));
 }
 
