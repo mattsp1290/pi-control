@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
-project(pi_control VERSION 0.2.0 LANGUAGES CXX)
+project(pi_control VERSION 0.3.1 LANGUAGES CXX)
+# Release tags, the package and the in-app update check all compare X.Y.Z.
+if(NOT PROJECT_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+  message(FATAL_ERROR "project VERSION must be X.Y.Z, got ${PROJECT_VERSION}")
+endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -28,6 +32,13 @@ add_library(pi_control_wifi STATIC
 target_include_directories(pi_control_wifi PUBLIC src)
 target_link_libraries(pi_control_wifi PUBLIC Qt6::Core Qt6::DBus PRIVATE fmt::fmt)
 target_compile_options(pi_control_wifi PRIVATE -Wall -Wextra -Wpedantic)
+# Release checks and the in-place update; no widgets.
+add_library(pi_control_update STATIC
+  src/update/release.cpp
+  src/update/updater.cpp)
+target_include_directories(pi_control_update PUBLIC src)
+target_link_libraries(pi_control_update PUBLIC Qt6::Core Qt6::Network PRIVATE fmt::fmt)
+target_compile_options(pi_control_update PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pi_control_app STATIC
   src/app/app_shell.cpp
   src/app/elided_label.cpp
@@ -40,16 +51,18 @@ add_library(pi_control_app STATIC
   src/app/settings_store.cpp
   src/app/signal_bars.cpp
   src/app/tabs.cpp
+  src/app/update_panel.cpp
   src/app/wifi_panel.cpp
   src/keyboard/on_screen_keyboard.cpp
   src/system/ip_addresses.cpp
   src/system/system_stats.cpp)
 target_include_directories(pi_control_app PUBLIC src)
-target_link_libraries(pi_control_app PUBLIC pi_control_screensaver pi_control_wifi Qt6::Widgets Qt6::DBus Qt6::Network
+target_link_libraries(pi_control_app PUBLIC pi_control_screensaver pi_control_wifi pi_control_update Qt6::Widgets Qt6::DBus Qt6::Network
   PRIVATE fmt::fmt)
 target_compile_options(pi_control_app PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(pi-control src/main.cpp)
 target_link_libraries(pi-control PRIVATE pi_control_app fmt::fmt)
+target_compile_definitions(pi-control PRIVATE PI_CONTROL_VERSION="${PROJECT_VERSION}")
 target_compile_options(pi-control PRIVATE -Wall -Wextra -Wpedantic)
 include(GNUInstallDirs)
 install(TARGETS pi-control RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -88,6 +101,11 @@ if(BUILD_TESTING)
   pi_control_qt_test(settings-store tests/test_settings_store.cpp)
   pi_control_qt_test(keyboard tests/test_on_screen_keyboard.cpp)
   pi_control_qt_test(wifi-panel tests/test_wifi_panel.cpp)
+  pi_control_qt_test(updater tests/test_updater.cpp pi_control_update)
+  add_test(NAME version COMMAND pi-control --version)
+  string(REPLACE "." "\\." version_pattern "${PROJECT_VERSION}")
+  set_tests_properties(version PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    PASS_REGULAR_EXPRESSION "(^|\n)pi-control ${version_pattern}\n" TIMEOUT 15)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
@@ -125,7 +143,10 @@ if(PI_CONTROL_PACKAGE)
   string(REPLACE "/usr/local/bin/pi-control" "/usr/bin/pi-control" service_unit "${service_unit}")
   file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/pi-control.service" "${service_unit}")
   install(FILES "${CMAKE_CURRENT_BINARY_DIR}/pi-control.service" DESTINATION lib/systemd/system)
+  install(FILES deploy/pi-control-update.service DESTINATION lib/systemd/system)
   install(FILES deploy/49-pi-control.rules DESTINATION share/polkit-1/rules.d)
+  # pi-control-update.service runs the release installer from here.
+  install(FILES distribution/install.sh DESTINATION lib/pi-control)
   set(CPACK_GENERATOR DEB)
   set(CPACK_PACKAGE_NAME pi-control)
   set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
@@ -133,7 +154,7 @@ if(PI_CONTROL_PACKAGE)
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Fullscreen Raspberry Pi control screen")
   set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
   set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins, libegl1, libgles2, libgbm1, libinput10, polkitd, systemd, adduser")
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins, libegl1, libgles2, libgbm1, libinput10, polkitd, systemd, adduser, curl, ca-certificates, python3")
   set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
     "${CMAKE_CURRENT_SOURCE_DIR}/distribution/debian/preinst"
     "${CMAKE_CURRENT_SOURCE_DIR}/distribution/debian/postinst"

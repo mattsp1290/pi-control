@@ -21,8 +21,19 @@ if tool == "id":
     print("123" if "pi-control" in args else "0")
 elif tool == "uname":
     print("Linux")
+elif tool == "dpkg" and args[0] == "--compare-versions":
+    def key(version):
+        return tuple(int(part) for part in version.split("."))
+    left, op, right = args[1:]
+    assert op == "le", op
+    sys.exit(0 if key(left) <= key(right) else 1)
 elif tool == "dpkg":
     print(os.environ.get("TEST_ARCH", "arm64"))
+elif tool == "dpkg-query":
+    installed = os.environ.get("TEST_INSTALLED")
+    if not installed:
+        sys.exit(1)
+    print(installed, end="")
 elif tool == "curl":
     url = args[args.index("--url") + 1]
     source = "manifest.json" if url.endswith(".json") else "pi-control_0.1.0_arm64.deb"
@@ -53,7 +64,7 @@ class DistributionTests(unittest.TestCase):
         shim = self.bin / "shim"
         shim.write_text(SHIM)
         shim.chmod(0o755)
-        for tool in ("id", "uname", "dpkg", "curl", "apt-get", "systemctl", "sleep", "getent", "adduser", "addgroup"):
+        for tool in ("id", "uname", "dpkg", "dpkg-query", "curl", "apt-get", "systemctl", "sleep", "getent", "adduser", "addgroup"):
             (self.bin / tool).symlink_to(shim)
         control = self.root / "package/DEBIAN"
         control.mkdir(parents=True)
@@ -71,7 +82,7 @@ class DistributionTests(unittest.TestCase):
     def run_script(self, path, *args, **env):
         source = (ROOT / path).read_text()
         for old, new in (("/run/systemd/system", str(self.root / "systemd")),
-                         ("/run/lock/pi-control-install.lock", str(self.root / "install.lock")),
+                         ("/run/pi-control-install.lock", str(self.root / "install.lock")),
                          ("/etc/systemd/system/pi-control.service", str(self.root / "manual.service")),
                          ("/var/lib/pi-control", str(self.root / "state"))):
             source = source.replace(old, new)
@@ -98,6 +109,46 @@ class DistributionTests(unittest.TestCase):
         result = self.run_script("distribution/install.sh", PI_CONTROL_INSTALL_VERSION="v0.1.0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(any("--allow-downgrades" in c for c in self.calls()))
+
+    def test_upgrade_only_skips_same_or_newer_installed_version(self):
+        for installed in ("installed 0.1.0", "installed 0.2.0"):
+            with self.subTest(installed=installed):
+                result = self.run_script("distribution/install.sh", PI_CONTROL_INSTALL_UPGRADE_ONLY="1",
+                                         TEST_INSTALLED=installed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("is up to date", result.stdout)
+        self.assertFalse(any(c[0] == "apt-get" for c in self.calls()))
+        self.assertFalse(any(c[0] == "curl" and c[-1].endswith(".deb") for c in self.calls()))
+
+    def test_upgrade_only_installs_newer_release(self):
+        for installed in ("installed 0.0.9", "config-files 0.2.0", ""):
+            with self.subTest(installed=installed):
+                result = self.run_script("distribution/install.sh", PI_CONTROL_INSTALL_UPGRADE_ONLY="1",
+                                         TEST_INSTALLED=installed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("service enabled and running", result.stdout)
+        installs = [c for c in self.calls() if c[:2] == ["apt-get", "install"]]
+        self.assertEqual(len(installs), 3)
+        self.assertNotIn("--allow-downgrades", installs[0])
+
+    def test_upgrade_only_rejects_pins_and_other_values(self):
+        for env in ({"PI_CONTROL_INSTALL_UPGRADE_ONLY": "1", "PI_CONTROL_INSTALL_VERSION": "v0.1.0"},
+                    {"PI_CONTROL_INSTALL_UPGRADE_ONLY": "yes"}):
+            with self.subTest(env=env):
+                result = self.run_script("distribution/install.sh", **env)
+                self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(c[0] in ("curl", "apt-get") for c in self.calls()))
+
+    def test_update_unit_runs_packaged_installer_in_upgrade_only_mode(self):
+        unit = (ROOT / "deploy/pi-control-update.service").read_text()
+        self.assertIn("Type=oneshot\n", unit)
+        self.assertIn("Environment=PI_CONTROL_INSTALL_UPGRADE_ONLY=1\n", unit)
+        self.assertIn("ExecStart=/usr/bin/systemd-inhibit --what=shutdown:sleep --mode=block", unit)
+        self.assertIn(" /bin/sh /usr/lib/pi-control/install.sh\n", unit)
+        self.assertNotIn("[Install]", unit)
+        cmake = (ROOT / "CMakeLists.txt").read_text()
+        self.assertIn("install(FILES distribution/install.sh DESTINATION lib/pi-control)", cmake)
+        self.assertIn("install(FILES deploy/pi-control-update.service DESTINATION lib/systemd/system)", cmake)
 
     def test_concurrent_installer_rejected_then_succeeds_after_unlock(self):
         with (self.root / "install.lock").open("w") as lock:
@@ -210,7 +261,11 @@ class DistributionTests(unittest.TestCase):
             "org.freedesktop.NetworkManager.wifi.scan",
             "org.freedesktop.NetworkManager.network-control",
             "org.freedesktop.NetworkManager.settings.modify.system",
+            "org.freedesktop.systemd1.manage-units",
         })
+        # Unit management is limited to starting the updater.
+        self.assertEqual(re.findall(r'action\.lookup\("(\w+)"\) === "([^"]+)"', rules),
+                         [("unit", "pi-control-update.service"), ("verb", "start")])
         self.assertNotIn("startsWith", rules)
         self.assertEqual(rules.count('subject.user === "pi-control"'), rules.count("polkit.addRule"))
 

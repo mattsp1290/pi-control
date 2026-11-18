@@ -8,6 +8,9 @@ class ScreensaverController;
 namespace pi_control::system {
 class SystemStatsSampler;
 }
+namespace pi_control::update {
+class Updater;
+}
 namespace pi_control::wifi {
 class WifiBackend;
 }
@@ -26,6 +29,7 @@ struct AppContext {
     system::SystemStatsSampler& stats;
     wifi::WifiBackend& wifi;
     SettingsStore& settings;
+    update::Updater& updater;
 };
 
 } // namespace pi_control::app
