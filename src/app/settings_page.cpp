@@ -3,6 +3,7 @@
 #include "app/app_context.h"
 #include "app/power_panel.h"
 #include "app/screensaver_panel.h"
+#include "app/update_panel.h"
 #include "app/wifi_panel.h"
 
 #include <QLabel>
@@ -33,6 +34,7 @@ SettingsPage::SettingsPage(const AppContext& context, QWidget* parent) : QWidget
     // Fixed order; Power is always last.
     addSection("Wi‑Fi", new WifiPanel(context.wifi, context.shell, context.screensaver));
     addSection("Screensaver", new ScreensaverPanel(context.screensaver, context.settings));
+    addSection("Software update", new UpdatePanel(context.updater, context.screensaver));
     power_ = new PowerPanel(context.power, context.screensaver);
     addSection("Power", power_);
 }

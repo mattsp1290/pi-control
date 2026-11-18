@@ -5,6 +5,7 @@
 #include "app/settings_store.h"
 #include "screensaver/screensaver_controller.h"
 #include "system/system_stats.h"
+#include "update/updater.h"
 #include "wifi/fake_wifi_backend.h"
 
 #include <QTabWidget>
@@ -19,6 +20,7 @@ struct AppFixture {
         std::unique_ptr<pi_control::system::SystemStatsSampler> stats;
         std::unique_ptr<pi_control::wifi::WifiBackend> wifi;
         QString settingsFile; // Empty: a fresh file in a temporary directory.
+        std::unique_ptr<pi_control::update::Updater> updater;
     };
 
     explicit AppFixture(pi_control::app::PowerOptions power = {.dryRun = true},
@@ -29,12 +31,15 @@ struct AppFixture {
         wifi = services.wifi ? std::move(services.wifi) : std::unique_ptr<pi_control::wifi::WifiBackend>(pi_control::wifi::FakeWifiBackend::withSampleNetworks());
         settings = std::make_unique<pi_control::app::SettingsStore>(
             services.settingsFile.isEmpty() ? settingsDir.filePath("settings.ini") : services.settingsFile);
+        updater = services.updater ? std::move(services.updater)
+                                   : std::make_unique<pi_control::update::Updater>(pi_control::update::UpdaterOptions{
+                                         .current = {0, 2, 0}, .releaseBase = QUrl("file:///nonexistent"), .dryRun = true});
         shell = std::make_unique<pi_control::app::AppShell>();
         shell->resize(800, 480);
         controller = std::make_unique<pi_control::screensaver::ScreensaverController>(shell->screensaverView(),
                                                                                        std::move(saverConfig));
         context = std::make_unique<pi_control::app::AppContext>(
-            pi_control::app::AppContext{*shell, *controller, power, *stats, *wifi, *settings});
+            pi_control::app::AppContext{*shell, *controller, power, *stats, *wifi, *settings, *updater});
         shell->buildTabs(*context);
     }
     ~AppFixture() {
@@ -58,6 +63,7 @@ struct AppFixture {
     std::unique_ptr<pi_control::wifi::WifiBackend> wifi;
     QTemporaryDir settingsDir;
     std::unique_ptr<pi_control::app::SettingsStore> settings;
+    std::unique_ptr<pi_control::update::Updater> updater;
     std::unique_ptr<pi_control::app::AppShell> shell;
     std::unique_ptr<pi_control::screensaver::ScreensaverController> controller;
     std::unique_ptr<pi_control::app::AppContext> context;

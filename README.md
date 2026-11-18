@@ -15,6 +15,9 @@ Three tabs run along the top:
   - **Wi‑Fi**: scan for networks, join one with the on-screen keyboard, and
     forget saved networks you are not connected to.
   - **Screensaver**: choose the screensaver and preview it.
+  - **Software update**: the running version and, when a newer release is
+    published, an **Update** button that installs it and restarts the screen.
+    See [Update from the screen](#update-from-the-screen).
   - **Power**: Shut down, which requests an orderly poweroff through
     systemd-logind. A failure stays on screen and the button works again.
 
@@ -123,7 +126,7 @@ No source checkout, compiler, or Qt development packages are needed on the Pi.
 Concurrent installer runs are rejected.
 
 The package creates a dedicated `pi-control` system account, installs the
-shutdown and Wi‑Fi authorization rule, enables `pi-control.service` for every boot,
+shutdown, Wi‑Fi and update authorization rule and the updater unit, enables `pi-control.service` for every boot,
 and restarts the service on install, reinstall, or upgrade. An existing
 `pi-control` account must have a system UID (1–999) and a nologin shell.
 The installer checks that the service remains active after five seconds;
@@ -145,6 +148,29 @@ download or checksum failure leaves the installed package untouched. An apt
 or service failure is reported with a nonzero exit status; there is no
 automatic rollback. Fix the reported cause and rerun the installer. Systemd
 overrides in `/etc/systemd/system/pi-control.service.d/` survive updates.
+
+### Update from the screen
+
+Settings → Software update shows the running version. Pi Control checks
+GitHub's latest release 30 seconds after it starts and every six hours after
+that; **Check for updates** checks at once. When the published release is newer
+than the running version, an **Update to X.Y.Z** button appears.
+
+Pressing it starts `pi-control-update.service`, a packaged oneshot unit that
+runs the same installer as above (shipped as `/usr/lib/pi-control/install.sh`)
+as root with `PI_CONTROL_INSTALL_UPGRADE_ONLY=1`. In that mode the installer
+does nothing when the latest release is not newer than the installed package,
+and never downgrades. The package upgrade restarts `pi-control.service`, so the
+screen goes blank for a few seconds and comes back on the new version. If the
+update fails, the screen says so and the button works again; the reason is in
+`journalctl -u pi-control-update`.
+
+The kiosk account cannot pass anything to the updater: the polkit rule lets it
+*start* exactly `pi-control-update.service` and nothing else, and the unit only
+installs the latest release, verified as described above. The update check
+itself is read-only and runs as the kiosk account. With `--dry-run` the button
+is simulated and nothing is started. Packages older than the first release with
+this feature have no updater unit; update those once with the installer.
 
 For an existing manual installation, stop the service and remove the old unit
 and polkit rule before running the installer; these would override the packaged

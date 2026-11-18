@@ -1,5 +1,7 @@
 #!/bin/sh
 # Install or update the latest release; PI_CONTROL_INSTALL_VERSION pins vX.Y.Z.
+# PI_CONTROL_INSTALL_UPGRADE_ONLY=1 (set by pi-control-update.service) installs
+# the latest release only when it is newer than the installed package.
 set -eu
 
 fail() {
@@ -20,7 +22,7 @@ main() {
   command -v dpkg >/dev/null || fail 'Debian/Raspberry Pi OS is required'
   [ "$(dpkg --print-architecture)" = arm64 ] || fail '64-bit ARM Raspberry Pi OS is required'
   [ -d /run/systemd/system ] || fail 'a running systemd system is required'
-  for cmd in curl python3 sha256sum apt-get flock dpkg-deb; do
+  for cmd in curl python3 sha256sum apt-get flock dpkg-deb dpkg-query; do
     command -v "$cmd" >/dev/null || fail "$cmd is required"
   done
   # Serialize downloads and apt operations from concurrent installer runs.
@@ -28,6 +30,13 @@ main() {
   flock -n 9 || fail 'another pi-control install is running'
 
   version=${PI_CONTROL_INSTALL_VERSION:-}
+  upgrade_only=${PI_CONTROL_INSTALL_UPGRADE_ONLY:-}
+  case $upgrade_only in
+    ''|1) ;;
+    *) fail 'PI_CONTROL_INSTALL_UPGRADE_ONLY must be 1 or unset' ;;
+  esac
+  [ -z "$upgrade_only" ] || [ -z "$version" ] ||
+    fail 'PI_CONTROL_INSTALL_UPGRADE_ONLY cannot be combined with PI_CONTROL_INSTALL_VERSION'
   if [ -n "$version" ]; then
     printf '%s\n' "$version" | python3 -c '
 import re, sys
@@ -62,6 +71,18 @@ print(digest)
 PY
   version=$(sed -n '1p' "$tmp/asset")
   digest=$(sed -n '2p' "$tmp/asset")
+  if [ -n "$upgrade_only" ]; then
+    installed=$(dpkg-query -W -f '${db:Status-Status} ${Version}' pi-control 2>/dev/null || true)
+    case $installed in
+      'installed '*)
+        installed=${installed#installed }
+        if dpkg --compare-versions "$version" le "$installed"; then
+          printf 'pi-control %s is up to date (latest release v%s).\n' "$installed" "$version"
+          return 0
+        fi
+        ;;
+    esac
+  fi
   package="pi-control_${version}_arm64.deb"
   fetch "$base/download/v$version/$package" "$tmp/$package"
   printf '%s  %s\n' "$digest" "$tmp/$package" | sha256sum -c -

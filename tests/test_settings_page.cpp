@@ -1,8 +1,10 @@
 #include "app_fixture.h"
+#include "release_tree.h"
 
 #include "app/power_panel.h"
 #include "app/screensaver_panel.h"
 #include "app/settings_page.h"
+#include "app/update_panel.h"
 #include "app/wifi_panel.h"
 #include "screensaver/registry.h"
 
@@ -61,7 +63,7 @@ private slots:
     void sectionsInOrder() {
         AppFixture fixture;
         auto* settings = fixture.page<SettingsPage>(u"settings");
-        QCOMPARE(settings->sectionTitles(), (QStringList{"Wi‑Fi", "Screensaver", "Power"}));
+        QCOMPARE(settings->sectionTitles(), (QStringList{"Wi‑Fi", "Screensaver", "Software update", "Power"}));
         QCOMPARE(settings->lastSection(), settings->powerPanel());
     }
 
@@ -180,6 +182,65 @@ private slots:
         // Choosing the override in Settings saves it.
         emit screensaverPanel(fixture)->choices()->idClicked(1);
         QCOMPARE(fixture.settings->screensaverId(), QString("mandelbrot"));
+    }
+
+    void updateButtonAppearsOnlyWithANewerRelease() {
+        ReleaseTree tree("0.3.0");
+        AppFixture::Services services;
+        services.updater = std::make_unique<update::Updater>(
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true});
+        AppFixture fixture({.dryRun = true}, {}, std::move(services));
+        fixture.shell->show();
+        QVERIFY(QTest::qWaitForWindowExposed(fixture.shell.get()));
+        fixture.showTab(u"settings");
+        auto* panel = fixture.page<SettingsPage>(u"settings")->findChild<UpdatePanel*>();
+        QVERIFY(panel);
+        QCOMPARE(panel->statusLabel()->text(), QString("Version 0.2.0."));
+        QVERIFY(panel->updateButton()->isHidden());
+
+        fixture.page<SettingsPage>(u"settings")->scrollArea()->ensureWidgetVisible(panel->checkButton());
+        QTest::mouseClick(panel->checkButton(), Qt::LeftButton);
+        QTRY_COMPARE(panel->statusLabel()->text(), QString("Version 0.3.0 is available. This is version 0.2.0."));
+        QVERIFY(!panel->updateButton()->isHidden());
+        QCOMPARE(panel->updateButton()->text(), QString("Update to 0.3.0"));
+
+        fixture.page<SettingsPage>(u"settings")->scrollArea()->ensureWidgetVisible(panel->updateButton());
+        QTest::mouseClick(panel->updateButton(), Qt::LeftButton);
+        QCOMPARE(panel->statusLabel()->text(), QString("Dry run: update to 0.3.0 requested."));
+        QVERIFY(!panel->updateButton()->isEnabled());
+        QVERIFY(!panel->checkButton()->isEnabled());
+        QVERIFY(fixture.controller->isInhibited());
+    }
+
+    void upToDateHidesTheUpdateButton() {
+        ReleaseTree tree("0.2.0");
+        AppFixture::Services services;
+        services.updater = std::make_unique<update::Updater>(
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true});
+        AppFixture fixture({.dryRun = true}, {}, std::move(services));
+        auto* panel = fixture.page<SettingsPage>(u"settings")->findChild<UpdatePanel*>();
+        fixture.updater->check();
+        QTRY_COMPARE(panel->statusLabel()->text(), QString("Version 0.2.0 is up to date."));
+        QVERIFY(panel->updateButton()->isHidden());
+        QVERIFY(panel->checkButton()->isEnabled());
+    }
+
+    void failedUpdateCanBeRetried() {
+        ReleaseTree tree("0.3.0");
+        AppFixture::Services services;
+        services.updater = std::make_unique<update::Updater>(update::UpdaterOptions{
+            .current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true, .failureTest = true});
+        AppFixture fixture({.dryRun = true}, {}, std::move(services));
+        auto* panel = fixture.page<SettingsPage>(u"settings")->findChild<UpdatePanel*>();
+        fixture.updater->check();
+        QTRY_VERIFY(panel->updateButton()->isEnabled() && !panel->updateButton()->isHidden());
+        panel->updateButton()->click();
+        QCOMPARE(panel->statusLabel()->text(), QString("Updating to 0.3.0… The screen restarts when it's done."));
+        QVERIFY(fixture.controller->isInhibited());
+        QTRY_COMPARE(panel->statusLabel()->text(),
+                     QString("Update failed. Check journalctl -u pi-control-update and try again."));
+        QVERIFY(panel->updateButton()->isEnabled());
+        QVERIFY(!fixture.controller->isInhibited());
     }
 
     void saveFailureKeepsChoiceForSession() {

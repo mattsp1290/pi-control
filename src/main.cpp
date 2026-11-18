@@ -17,6 +17,7 @@
 #include "screensaver/registry.h"
 #include "screensaver/screensaver_controller.h"
 #include "system/system_stats.h"
+#include "update/updater.h"
 #include "wifi/fake_wifi_backend.h"
 #include "wifi/nm_wifi_backend.h"
 
@@ -81,10 +82,12 @@ void runStatusReport(QApplication& app, app::AppShell& shell, wifi::WifiBackend&
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("pi-control");
+    QApplication::setApplicationVersion(PI_CONTROL_VERSION);
     QCommandLineParser parser;
     parser.setApplicationDescription("Raspberry Pi control screen");
     parser.addHelpOption();
-    parser.addOption({"dry-run", "Simulate shutdown without powering off."});
+    parser.addVersionOption();
+    parser.addOption({"dry-run", "Simulate shutdown and updates without changing the system."});
     parser.addOption({"smoke-test", "Exercise the real button safely and exit."});
     parser.addOption({"smoke-test-failure", "Safely exercise a disconnected shutdown bus and exit."});
     QStringList screensaverIds;
@@ -146,9 +149,12 @@ int main(int argc, char** argv) {
     } else {
         wifiBackend = std::make_unique<wifi::NmWifiBackend>(QDBusConnection::systemBus());
     }
+    update::Updater updater({.current = *update::parseVersion(QStringLiteral(PI_CONTROL_VERSION)),
+                             .dryRun = power.dryRun,
+                             .failureTest = failureTest});
     app::AppShell shell;
     ScreensaverController saverController(shell.screensaverView(), std::move(saverConfig));
-    const app::AppContext context{shell, saverController, power, stats, *wifiBackend, settingsStore};
+    const app::AppContext context{shell, saverController, power, stats, *wifiBackend, settingsStore, updater};
     shell.buildTabs(context);
 
     if (parser.isSet(statusReportOption)) {
@@ -156,6 +162,11 @@ int main(int argc, char** argv) {
         return app.exec();
     }
     shell.showFullScreen();
+    if (!smoke) {
+        // Give the network time to come up after boot; then check a few times a day.
+        using namespace std::chrono_literals;
+        updater.startPeriodicChecks(30s, 6h);
+    }
 
     if (smoke) {
         QTimer::singleShot(0, &shell, [&] {
