@@ -69,12 +69,14 @@ ScreensaverController::~ScreensaverController() {
     if (auto* app = QCoreApplication::instance()) app->removeEventFilter(this);
 }
 
-void ScreensaverController::setInhibited(const void* owner, bool inhibited) {
+void ScreensaverController::setInhibited(const QObject* owner, bool inhibited) {
     const bool was = isInhibited();
-    if (inhibited) {
+    if (inhibited && !inhibitors_.contains(owner)) {
         inhibitors_.insert(owner);
-    } else {
-        inhibitors_.remove(owner);
+        connect(owner, &QObject::destroyed, this, [this, owner] { setInhibited(owner, false); },
+                Qt::SingleShotConnection);
+    } else if (!inhibited && inhibitors_.remove(owner)) {
+        disconnect(owner, &QObject::destroyed, this, nullptr);
     }
     if (isInhibited() == was) return;
     previewPending_ = false;

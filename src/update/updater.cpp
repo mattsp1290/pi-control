@@ -1,9 +1,5 @@
 #include "update/updater.h"
 
-#include <QDBusMessage>
-#include <QDBusObjectPath>
-#include <QDBusPendingCallWatcher>
-#include <QDBusPendingReply>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 
@@ -15,89 +11,57 @@ namespace {
 
 constexpr qint64 kManifestLimit = 64 * 1024;
 constexpr int kManifestTimeoutMs = 20000;
-constexpr char kSystemd[] = "org.freedesktop.systemd1";
-constexpr char kSystemdPath[] = "/org/freedesktop/systemd1";
-constexpr char kManager[] = "org.freedesktop.systemd1.Manager";
 
-QDBusMessage managerCall(const char* method) {
-    return QDBusMessage::createMethodCall(kSystemd, kSystemdPath, kManager, method);
+QUrl manifestUrl(const QUrl& base) {
+    if (base.scheme() != "https" && base.scheme() != "file") return {};
+    QUrl url = base;
+    QString path = url.path();
+    while (path.endsWith('/')) path.chop(1);
+    url.setPath(path + "/latest/download/pi-control-manifest.json");
+    return url;
 }
 
 } // namespace
 
-SystemdUpdateStarter::SystemdUpdateStarter(QDBusConnection bus, QObject* parent)
-    : UpdateStarter(parent), bus_(std::move(bus)) {}
-
-void SystemdUpdateStarter::start() {
-    if (running_) return;
-    running_ = true;
-    job_.clear();
-    early_.reset();
-    // Watch for the start job before creating it: without the JobRemoved
-    // signal the result can never be observed, so do not start at all.
-    if (!bus_.connect(kSystemd, kSystemdPath, kManager, "JobRemoved", this,
-                      SLOT(onJobRemoved(uint, QDBusObjectPath, QString, QString)))) {
-        const QString reason = bus_.lastError().isValid() ? bus_.lastError().message() : "system bus unavailable";
-        QTimer::singleShot(0, this, [this, reason] { finish(false, "cannot watch systemd jobs: " + reason); });
-        return;
-    }
-    // systemd sends JobRemoved only while some client is subscribed.
-    auto* subscribed = new QDBusPendingCallWatcher(bus_.asyncCall(managerCall("Subscribe")), this);
-    connect(subscribed, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher* call) {
-        const QDBusPendingReply<> reply = *call;
-        call->deleteLater();
-        if (reply.isError()) finish(false, "cannot subscribe to systemd: " + reply.error().message());
+SystemctlUpdateStarter::SystemctlUpdateStarter(QString program, QObject* parent)
+    : UpdateStarter(parent), program_(std::move(program)) {
+    connect(&process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+        const bool ok = status == QProcess::NormalExit && code == 0;
+        emit finished(ok ? Result::Done : Result::Failed, QString::fromUtf8(process_.readAll()).trimmed());
     });
-    auto message = managerCall("StartUnit");
-    message << QString(kUpdateUnit) << QStringLiteral("replace");
-    auto* started = new QDBusPendingCallWatcher(bus_.asyncCall(message, 25000), this);
-    connect(started, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher* call) {
-        const QDBusPendingReply<QDBusObjectPath> reply = *call;
-        call->deleteLater();
-        if (!running_) return;
-        if (reply.isError()) {
-            finish(false, reply.error().message());
-            return;
-        }
-        job_ = reply.value().path();
-        if (early_ && early_->first == job_) onJobRemoved(0, QDBusObjectPath(early_->first), kUpdateUnit, early_->second);
+    connect(&process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) emit finished(Result::Failed, process_.errorString());
     });
 }
 
-void SystemdUpdateStarter::onJobRemoved(uint, const QDBusObjectPath& job, const QString& unit, const QString& result) {
-    if (!running_ || unit != kUpdateUnit) return;
-    if (job_.isEmpty()) {
-        early_.emplace(job.path(), result);
-        return;
-    }
-    if (job.path() != job_) return; // Someone else's run, such as a manual systemctl start.
-    finish(result == "done", QString("%1 finished with result %2").arg(kUpdateUnit, result));
+void SystemctlUpdateStarter::start() {
+    if (process_.state() != QProcess::NotRunning) return;
+    process_.setProcessChannelMode(QProcess::MergedChannels);
+    process_.setStandardInputFile(QProcess::nullDevice());
+    // No password agent in a kiosk: polkit's rule alone decides.
+    process_.start(program_, {"--no-ask-password", "start", kUpdateUnit});
 }
 
-void SystemdUpdateStarter::finish(bool ok, const QString& detail) {
-    if (!running_) return;
-    running_ = false;
-    bus_.disconnect(kSystemd, kSystemdPath, kManager, "JobRemoved", this,
-                    SLOT(onJobRemoved(uint, QDBusObjectPath, QString, QString)));
-    if (bus_.isConnected()) bus_.asyncCall(managerCall("Unsubscribe"));
-    emit finished(ok, detail);
+DryRunUpdateStarter::DryRunUpdateStarter(std::chrono::milliseconds delay, QObject* parent)
+    : UpdateStarter(parent), delay_(delay) {}
+
+void DryRunUpdateStarter::start() {
+    fmt::print("Dry run: {} was not started.\n", kUpdateUnit);
+    QTimer::singleShot(delay_, this, [this] { emit finished(Result::Simulated, {}); });
 }
 
 Updater::Updater(UpdaterOptions options, std::unique_ptr<UpdateStarter> starter, QObject* parent)
-    : QObject(parent), options_(std::move(options)), starter_(std::move(starter)) {
-    Q_ASSERT(starter_ || options_.dryRun);
-    if (starter_) connect(starter_.get(), &UpdateStarter::finished, this, &Updater::installFinished);
+    : QObject(parent), options_(std::move(options)), starter_(std::move(starter)),
+      manifestUrl_(manifestUrl(options_.releaseBase)) {
+    Q_ASSERT(starter_);
+    connect(starter_.get(), &UpdateStarter::finished, this, &Updater::installFinished);
     connect(&periodic_, &QTimer::timeout, this, [this] {
         periodic_.start(interval_);
         check();
     });
-    installTimer_.setSingleShot(true);
-    connect(&installTimer_, &QTimer::timeout, this, [this] {
-        if (options_.dryRun) {
-            setState(State::Available);
-        } else {
-            installFinished(false, QString("no result from %1").arg(kUpdateUnit));
-        }
+    installWatchdog_.setSingleShot(true);
+    connect(&installWatchdog_, &QTimer::timeout, this, [this] {
+        installFinished(UpdateStarter::Result::Failed, QString("no result from %1").arg(kUpdateUnit));
     });
 }
 
@@ -109,93 +73,82 @@ void Updater::startPeriodicChecks(std::chrono::milliseconds first, std::chrono::
 void Updater::setState(State state) {
     if (state_ == state) return;
     state_ = state;
-    if (state != State::Installing) installTimer_.stop();
+    if (state != State::Installing) installWatchdog_.stop();
     emit stateChanged(state);
 }
 
 void Updater::check() {
-    if (state_ == State::Checking || state_ == State::Installing) return;
-    const QString scheme = options_.releaseBase.scheme();
-    if (scheme != "https" && scheme != "file") {
-        fmt::print(stderr, "Update check: release base must be https:// or file://\n");
+    if (busy()) return;
+    if (manifestUrl_.isEmpty()) {
+        fmt::print(stderr, "Update check failed: release base must be https:// or file://\n");
         setState(State::CheckFailed);
         return;
     }
-    QUrl url = options_.releaseBase;
-    QString path = url.path();
-    while (path.endsWith('/')) path.chop(1);
-    url.setPath(path + "/latest/download/pi-control-manifest.json");
-    QNetworkRequest request(url);
+    QNetworkRequest request(manifestUrl_);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setTransferTimeout(kManifestTimeoutMs);
+    checkTooLarge_ = false;
     setState(State::Checking);
     QNetworkReply* reply = network_.get(request);
-    auto tooLarge = std::make_shared<bool>(false);
-    connect(reply, &QNetworkReply::downloadProgress, this, [reply, tooLarge](qint64 received, qint64) {
-        if (received > kManifestLimit && !*tooLarge) {
-            *tooLarge = true;
+    connect(reply, &QNetworkReply::downloadProgress, this, [this, reply](qint64 received, qint64) {
+        if (received > kManifestLimit && !checkTooLarge_) {
+            checkTooLarge_ = true;
             reply->abort();
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, tooLarge] { finishCheck(reply, *tooLarge); });
+    connect(reply, &QNetworkReply::finished, this, [this, reply] { finishCheck(reply); });
 }
 
-void Updater::finishCheck(QNetworkReply* reply, bool tooLarge) {
+void Updater::finishCheck(QNetworkReply* reply) {
     reply->deleteLater();
-    const QByteArray body = reply->error() == QNetworkReply::NoError ? reply->readAll() : QByteArray();
-    QString error;
-    if (tooLarge || body.size() > kManifestLimit) {
-        error = "release manifest too large";
-    } else if (reply->error() != QNetworkReply::NoError) {
-        error = reply->errorString();
-    }
-    ManifestResult manifest;
-    if (error.isEmpty()) {
-        manifest = parseManifest(body);
-        error = manifest.error;
-    }
-    if (!error.isEmpty()) {
-        fmt::print(stderr, "Update check failed: {}\n", error.toStdString());
+    const auto fail = [this](const QString& why) {
+        fmt::print(stderr, "Update check failed: {}\n", why.toStdString());
         setState(State::CheckFailed);
-        return;
-    }
-    latest_ = manifest.version;
-    fmt::print(stderr, "Update check: latest {}, running {}\n", latest_->toString().toStdString(),
+    };
+    if (checkTooLarge_) return fail("release manifest too large");
+    if (reply->error() != QNetworkReply::NoError) return fail(reply->errorString());
+    const QByteArray body = reply->readAll();
+    if (body.size() > kManifestLimit) return fail("release manifest too large");
+    const auto manifest = parseManifest(body);
+    if (const auto* error = std::get_if<QString>(&manifest)) return fail(*error);
+    const Version latest = std::get<Version>(manifest);
+    fmt::print(stderr, "Update check: latest {}, running {}\n", latest.toString().toStdString(),
                options_.current.toString().toStdString());
-    setState(newerKnown() ? State::Available : State::UpToDate);
-}
-
-bool Updater::canInstall() const {
-    // After a failed re-check the release found earlier is still worth offering.
-    return newerKnown()
-           && (state_ == State::Available || state_ == State::InstallFailed || state_ == State::CheckFailed);
+    if (latest > options_.current) {
+        offer_ = latest;
+        setState(State::Available);
+    } else {
+        offer_.reset();
+        setState(State::UpToDate);
+    }
 }
 
 void Updater::install() {
     if (!canInstall()) return;
+    fmt::print(stderr, "Update: starting {} for {} or newer\n", kUpdateUnit, offer_->toString().toStdString());
     setState(State::Installing);
-    if (options_.dryRun) {
-        fmt::print("Dry run: {} was not started.\n", kUpdateUnit);
-        installTimer_.start(options_.dryRunDuration);
-        emit dryRunInstallRequested();
-        return;
-    }
-    fmt::print(stderr, "Update: starting {} for {} or newer\n", kUpdateUnit, latest_->toString().toStdString());
-    installTimer_.start(options_.installTimeout);
+    installWatchdog_.start(options_.installTimeout);
     starter_->start();
 }
 
-void Updater::installFinished(bool ok, const QString& detail) {
+void Updater::installFinished(UpdateStarter::Result result, const QString& detail) {
     if (state_ != State::Installing) return;
-    if (!ok) {
+    switch (result) {
+    case UpdateStarter::Result::Simulated:
+        setState(State::Available);
+        return;
+    case UpdateStarter::Result::Failed:
         fmt::print(stderr, "Update failed: {}\n", detail.toStdString());
         setState(State::InstallFailed);
         return;
+    case UpdateStarter::Result::Done:
+        // Success restarts this process before the job ends. Still running
+        // means the installer found nothing newer than the installed package.
+        fmt::print(stderr, "Update: {} finished without replacing pi-control\n", kUpdateUnit);
+        offer_.reset();
+        setState(State::NothingInstalled);
+        return;
     }
-    // Success restarts this process before the job ends. Still running means
-    // the installer found nothing newer than the installed package.
-    fmt::print(stderr, "Update: {} finished without replacing pi-control\n", kUpdateUnit);
-    setState(State::NothingInstalled);
 }
 
 } // namespace pi_control::update

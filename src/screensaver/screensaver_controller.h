@@ -56,7 +56,8 @@ public:
 
     // Inhibited while any owner holds an inhibition, so independent tasks
     // (a pending shutdown, an update) cannot release each other's.
-    void setInhibited(const void* owner, bool inhibited);
+    // An owner destroyed while inhibiting releases its inhibition.
+    void setInhibited(const QObject* owner, bool inhibited);
     // Used from the next activation on; a running screensaver keeps going.
     // The controller keeps a pointer: descriptor must outlive it, as
     // builtinScreensavers() entries do.
@@ -98,7 +99,7 @@ private:
     QPointer<ScreensaverView> view_;
     ScreensaverControllerConfig config_;
     State state_ = State::Watching;
-    QSet<const void*> inhibitors_;
+    QSet<const QObject*> inhibitors_;
     bool previewPending_ = false; // preview() waits for a held press to end.
     QString activeId_;
     QTimer idleTimer_;

@@ -35,14 +35,13 @@ QString PowerPanel::idleText() const { return options_.dryRun ? "Dry run: shutdo
 
 void PowerPanel::setBlocked(const QString& reason) {
     if (blocked_ == reason) return;
-    const bool showingBlock = !blocked_.isEmpty() && status_->text() == blocked_;
     blocked_ = reason;
-    if (!pending_) {
-        if (!reason.isEmpty()) {
-            status_->setText(reason);
-        } else if (showingBlock) {
-            status_->setText(idleText());
-        }
+    if (!reason.isEmpty() && !pending_) {
+        status_->setText(reason);
+        showingBlock_ = true;
+    } else if (reason.isEmpty() && showingBlock_) {
+        status_->setText(idleText());
+        showingBlock_ = false;
     }
     refresh();
 }
@@ -53,6 +52,7 @@ void PowerPanel::requestShutdown() {
     if (pending_ || !blocked_.isEmpty()) return;
     screensaver_.setInhibited(this, true); // No screensaver while a shutdown is pending.
     pending_ = true;
+    showingBlock_ = false;
     refresh();
     emit shutdownRequested();
     if (options_.dryRun && !options_.failureTest) {
@@ -75,6 +75,7 @@ void PowerPanel::requestShutdown() {
             const QString detail = reply.error().message();
             fmt::print(stderr, "Shutdown failed: {}\n", detail.toStdString());
             status_->setText("Shutdown failed. Check the service journal and try again.");
+            showingBlock_ = false;
             pending_ = false;
             refresh();
             screensaver_.setInhibited(this, false);

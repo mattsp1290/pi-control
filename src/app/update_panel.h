@@ -5,9 +5,6 @@
 class QLabel;
 class QPushButton;
 
-namespace pi_control::screensaver {
-class ScreensaverController;
-}
 namespace pi_control::update {
 class Updater;
 }
@@ -20,7 +17,8 @@ class UpdatePanel final : public QWidget {
     Q_OBJECT
 
 public:
-    UpdatePanel(update::Updater& updater, screensaver::ScreensaverController& screensaver, QWidget* parent = nullptr);
+    // dryRun only changes the wording while an install is simulated.
+    UpdatePanel(update::Updater& updater, bool dryRun, QWidget* parent = nullptr);
 
     QLabel* statusLabel() const { return status_; }
     QPushButton* checkButton() const { return check_; }
@@ -30,7 +28,7 @@ private:
     void refresh();
 
     update::Updater& updater_;
-    screensaver::ScreensaverController& screensaver_;
+    bool dryRun_;
     QLabel* status_;
     QPushButton* check_;
     QPushButton* update_;

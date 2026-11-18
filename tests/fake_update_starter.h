@@ -8,7 +8,7 @@ class FakeUpdateStarter final : public pi_control::update::UpdateStarter {
 
 public:
     void start() override { ++starts; }
-    void finish(bool ok, const QString& detail = {}) { emit finished(ok, detail); }
+    void finish(Result result, const QString& detail = {}) { emit finished(result, detail); }
 
     int starts = 0;
 };

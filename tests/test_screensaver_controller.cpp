@@ -405,6 +405,19 @@ private slots:
         QCOMPARE(controller_->state(), State::Watching);
     }
 
+    void inhibitionLastsUntilEveryOwnerReleases() {
+        build(defaultConfig());
+        QObject first;
+        auto second = std::make_unique<QObject>();
+        controller_->setInhibited(&first, true);
+        controller_->setInhibited(second.get(), true);
+        controller_->setInhibited(&first, false);
+        QVERIFY(controller_->isInhibited());
+        second.reset(); // A destroyed owner releases its inhibition.
+        QVERIFY(!controller_->isInhibited());
+        waitUntilActive();
+    }
+
     void uninhibitRestartsTimer() {
         build(defaultConfig());
         controller_->setInhibited(this, true);

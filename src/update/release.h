@@ -6,6 +6,7 @@
 
 #include <compare>
 #include <optional>
+#include <variant>
 
 namespace pi_control::update {
 
@@ -21,13 +22,8 @@ struct Version {
 
 std::optional<Version> parseVersion(QStringView text);
 
-// What the release manifest says, once it has passed the same checks
-// distribution/install.sh applies before it installs anything.
-struct ManifestResult {
-    std::optional<Version> version; // Set when the manifest is valid.
-    QString error;                  // Why it is not.
-};
-
-ManifestResult parseManifest(const QByteArray& json);
+// The release a manifest names once it passes the same checks
+// distribution/install.sh applies before it installs anything, or why it does not.
+std::variant<Version, QString> parseManifest(const QByteArray& json);
 
 } // namespace pi_control::update

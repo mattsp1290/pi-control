@@ -34,9 +34,8 @@ struct AppFixture {
         updater = services.updater ? std::move(services.updater)
                                    : std::make_unique<pi_control::update::Updater>(
                                          pi_control::update::UpdaterOptions{.current = {0, 2, 0},
-                                                                            .releaseBase = QUrl("file:///nonexistent"),
-                                                                            .dryRun = true},
-                                         nullptr);
+                                                                            .releaseBase = QUrl("file:///nonexistent")},
+                                         std::make_unique<pi_control::update::DryRunUpdateStarter>());
         shell = std::make_unique<pi_control::app::AppShell>();
         shell->resize(800, 480);
         controller = std::make_unique<pi_control::screensaver::ScreensaverController>(shell->screensaverView(),

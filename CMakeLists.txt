@@ -37,7 +37,7 @@ add_library(pi_control_update STATIC
   src/update/release.cpp
   src/update/updater.cpp)
 target_include_directories(pi_control_update PUBLIC src)
-target_link_libraries(pi_control_update PUBLIC Qt6::Core Qt6::DBus Qt6::Network PRIVATE fmt::fmt)
+target_link_libraries(pi_control_update PUBLIC Qt6::Core Qt6::Network PRIVATE fmt::fmt)
 target_compile_options(pi_control_update PRIVATE -Wall -Wextra -Wpedantic)
 add_library(pi_control_app STATIC
   src/app/app_shell.cpp

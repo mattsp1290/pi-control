@@ -44,6 +44,7 @@ private:
     QPushButton* button_;
     bool pending_ = false; // A shutdown was requested and has not failed.
     QString blocked_;
+    bool showingBlock_ = false; // The status label shows blocked_.
 };
 
 } // namespace pi_control::app

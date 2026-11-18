@@ -189,7 +189,8 @@ private slots:
         ReleaseTree tree("0.3.0");
         AppFixture::Services services;
         services.updater = std::make_unique<update::Updater>(
-            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true}, nullptr);
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base()},
+            std::make_unique<update::DryRunUpdateStarter>());
         AppFixture fixture({.dryRun = true}, {}, std::move(services));
         fixture.shell->show();
         QVERIFY(QTest::qWaitForWindowExposed(fixture.shell.get()));
@@ -223,7 +224,8 @@ private slots:
         ReleaseTree tree("0.2.0");
         AppFixture::Services services;
         services.updater = std::make_unique<update::Updater>(
-            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base(), .dryRun = true}, nullptr);
+            update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base()},
+            std::make_unique<update::DryRunUpdateStarter>());
         AppFixture fixture({.dryRun = true}, {}, std::move(services));
         auto* panel = fixture.page<SettingsPage>(u"settings")->findChild<UpdatePanel*>();
         fixture.updater->check();
@@ -241,7 +243,8 @@ private slots:
         AppFixture::Services services;
         services.updater = std::make_unique<update::Updater>(
             update::UpdaterOptions{.current = {0, 2, 0}, .releaseBase = tree.base()}, std::move(starter));
-        AppFixture fixture({.dryRun = true, .failureTest = true}, {}, std::move(services));
+        // Not a dry run, but shutdown goes to a disconnected bus and fails.
+        AppFixture fixture({.dryRun = false, .failureTest = true}, {}, std::move(services));
         auto* settings = fixture.page<SettingsPage>(u"settings");
         auto* panel = settings->findChild<UpdatePanel*>();
         PowerPanel* power = settings->powerPanel();
@@ -259,7 +262,7 @@ private slots:
         QVERIFY(!power->shutdownButton()->isEnabled());
         power->shutdownButton()->click(); // Disabled: no request.
 
-        fake->finish(false, "failed");
+        fake->finish(update::UpdateStarter::Result::Failed, "failed");
         QCOMPARE(panel->statusLabel()->text(),
                  QString("Update failed. Check journalctl -u pi-control-update and try again."));
         QVERIFY(panel->updateButton()->isEnabled());
@@ -269,11 +272,11 @@ private slots:
         // Blocking shows why, and unblocking restores the panel.
         panel->updateButton()->click();
         QCOMPARE(power->statusLabel()->text(), QString("Shut down is unavailable while the software update installs."));
-        fake->finish(true);
+        fake->finish(update::UpdateStarter::Result::Done);
         QCOMPARE(panel->statusLabel()->text(),
                  QString("The installed package is already the latest release. Restart Pi Control to run it."));
         QVERIFY(panel->updateButton()->isHidden());
-        QCOMPARE(power->statusLabel()->text(), QString("Dry run: shutdown is simulated."));
+        QCOMPARE(power->statusLabel()->text(), QString());
         QVERIFY(power->shutdownButton()->isEnabled());
     }
 

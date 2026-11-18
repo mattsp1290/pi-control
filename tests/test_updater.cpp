@@ -4,10 +4,11 @@
 #include "update/release.h"
 #include "update/updater.h"
 
-#include <QDBusObjectPath>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QTest>
 
 using namespace pi_control::update;
@@ -15,31 +16,33 @@ using namespace pi_control::update;
 namespace {
 
 using namespace std::chrono_literals;
+using Result = UpdateStarter::Result;
 
-UpdaterOptions options(const ReleaseTree& tree, Version current = {0, 2, 0}) {
-    return {.current = current, .releaseBase = tree.base(), .dryRun = true};
+UpdaterOptions options(const ReleaseTree& tree, std::chrono::milliseconds timeout = 21min) {
+    return {.current = {0, 2, 0}, .releaseBase = tree.base(), .installTimeout = timeout};
 }
 
-// A dry-run updater: install() starts nothing.
-std::unique_ptr<Updater> dryRun(const ReleaseTree& tree, Version current = {0, 2, 0}) {
-    return std::make_unique<Updater>(options(tree, current), nullptr);
+std::unique_ptr<Updater> dryRun(const ReleaseTree& tree) {
+    return std::make_unique<Updater>(options(tree), std::make_unique<DryRunUpdateStarter>(50ms));
 }
 
-// A real-mode updater whose unit starts are recorded by the returned fake.
+// An updater whose unit starts are recorded by the returned fake.
 std::pair<std::unique_ptr<Updater>, FakeUpdateStarter*> withFakeStarter(const ReleaseTree& tree,
                                                                         std::chrono::milliseconds timeout = 21min) {
     auto starter = std::make_unique<FakeUpdateStarter>();
     FakeUpdateStarter* fake = starter.get();
-    auto opts = options(tree);
-    opts.dryRun = false;
-    opts.installTimeout = timeout;
-    return {std::make_unique<Updater>(opts, std::move(starter)), fake};
+    return {std::make_unique<Updater>(options(tree, timeout), std::move(starter)), fake};
 }
 
 void checkAndWait(Updater& updater) {
     updater.check();
     QCOMPARE(updater.state(), Updater::State::Checking);
     QTRY_VERIFY(updater.state() != Updater::State::Checking);
+}
+
+QString errorOf(const QJsonObject& manifest) {
+    const auto parsed = parseManifest(QJsonDocument(manifest).toJson());
+    return std::holds_alternative<QString>(parsed) ? std::get<QString>(parsed) : QString();
 }
 
 } // namespace
@@ -62,32 +65,31 @@ private slots:
         const QJsonObject good{{"schema", 1},
                                {"version", "1.2.3"},
                                {"sha256", QJsonObject{{"linux-aarch64", QString(64, 'a')}}}};
-        const auto parse = [](const QJsonObject& manifest) {
-            return parseManifest(QJsonDocument(manifest).toJson());
-        };
         const auto broken = [&](const char* key, const QJsonValue& value) {
             QJsonObject manifest = good;
             manifest[key] = value;
-            return parse(manifest).error;
+            return errorOf(manifest);
         };
-        QCOMPARE(parse(good).version, (Version{1, 2, 3}));
+        const auto parsed = parseManifest(QJsonDocument(good).toJson());
+        QCOMPARE(std::get<Version>(parsed), (Version{1, 2, 3}));
         QVERIFY(broken("schema", 2).contains("schema"));
         QVERIFY(broken("schema", "1").contains("schema"));
         QVERIFY(broken("version", "v1.2.3").contains("version"));
         QVERIFY(broken("sha256", QJsonObject{{"linux-aarch64", "abc"}}).contains("checksum"));
         QVERIFY(broken("sha256", QJsonObject{{"linux-aarch64", QString(64, 'A')}}).contains("checksum"));
         QVERIFY(broken("sha256", QJsonObject{{"linux-x86_64", QString(64, 'a')}}).contains("checksum"));
-        QVERIFY(!parseManifest("not json").version);
-        QVERIFY(!parseManifest("[]").version);
+        QVERIFY(std::holds_alternative<QString>(parseManifest("not json")));
+        QVERIFY(std::holds_alternative<QString>(parseManifest("[]")));
     }
 
     void newerReleaseIsOffered() {
         ReleaseTree tree("0.3.0");
         auto updater = dryRun(tree);
         QCOMPARE(updater->state(), Updater::State::Idle);
+        QVERIFY(!updater->canInstall());
         checkAndWait(*updater);
         QCOMPARE(updater->state(), Updater::State::Available);
-        QCOMPARE(updater->latest(), (Version{0, 3, 0}));
+        QCOMPARE(updater->offer(), (Version{0, 3, 0}));
         QVERIFY(updater->canInstall());
     }
 
@@ -97,6 +99,7 @@ private slots:
             auto [updater, starter] = withFakeStarter(tree);
             checkAndWait(*updater);
             QCOMPARE(updater->state(), Updater::State::UpToDate);
+            QVERIFY(!updater->offer());
             updater->install(); // Nothing to install.
             QCOMPARE(updater->state(), Updater::State::UpToDate);
             QCOMPARE(starter->starts, 0);
@@ -109,54 +112,50 @@ private slots:
         auto broken = dryRun(tree);
         checkAndWait(*broken);
         QCOMPARE(broken->state(), Updater::State::CheckFailed);
-        QVERIFY(!broken->latest());
-        QVERIFY(!broken->canInstall());
+        QVERIFY(!broken->offer());
 
         tree.write(QByteArray(70 * 1024, ' ') + "{}");
         auto large = dryRun(tree);
         checkAndWait(*large);
         QCOMPARE(large->state(), Updater::State::CheckFailed);
 
-        Updater missing({.current = {0, 2, 0}, .releaseBase = QUrl::fromLocalFile(tree.dir.filePath("nope")),
-                         .dryRun = true},
-                        nullptr);
+        Updater missing({.current = {0, 2, 0}, .releaseBase = QUrl::fromLocalFile(tree.dir.filePath("nope"))},
+                        std::make_unique<DryRunUpdateStarter>());
         checkAndWait(missing);
         QCOMPARE(missing.state(), Updater::State::CheckFailed);
     }
 
     void plainHttpIsRefused() {
-        Updater updater({.current = {0, 2, 0}, .releaseBase = QUrl("http://example.invalid/releases"), .dryRun = true},
-                        nullptr);
+        Updater updater({.current = {0, 2, 0}, .releaseBase = QUrl("http://example.invalid/releases")},
+                        std::make_unique<DryRunUpdateStarter>());
         updater.check();
         QCOMPARE(updater.state(), Updater::State::CheckFailed);
     }
 
-    void failedRecheckKeepsTheKnownRelease() {
+    void failedRecheckKeepsTheOffer() {
         ReleaseTree tree("0.3.0");
         auto [updater, starter] = withFakeStarter(tree);
         checkAndWait(*updater);
         tree.write("broken");
-        checkAndWait(*updater);
-        QCOMPARE(updater->state(), Updater::State::CheckFailed);
+        updater->check();
+        QVERIFY(updater->offer());
+        QVERIFY(!updater->canInstall()); // Not while checking.
+        QTRY_COMPARE(updater->state(), Updater::State::CheckFailed);
         QVERIFY(updater->canInstall());
         updater->install();
         QCOMPARE(updater->state(), Updater::State::Installing);
         QCOMPARE(starter->starts, 1);
     }
 
-    void dryRunInstallStartsNothingAndEnds() {
+    void dryRunInstallEnds() {
         ReleaseTree tree("0.3.0");
-        auto opts = options(tree);
-        opts.dryRunDuration = 50ms;
-        Updater updater(opts, nullptr);
-        checkAndWait(updater);
-        QSignalSpy requested(&updater, &Updater::dryRunInstallRequested);
-        updater.install();
-        QCOMPARE(updater.state(), Updater::State::Installing);
-        QCOMPARE(requested.count(), 1);
-        updater.check(); // Not while installing.
-        QCOMPARE(updater.state(), Updater::State::Installing);
-        QTRY_COMPARE(updater.state(), Updater::State::Available);
+        auto updater = dryRun(tree);
+        checkAndWait(*updater);
+        updater->install();
+        QCOMPARE(updater->state(), Updater::State::Installing);
+        updater->check(); // Not while installing.
+        QCOMPARE(updater->state(), Updater::State::Installing);
+        QTRY_COMPARE(updater->state(), Updater::State::Available);
     }
 
     void jobResultDecidesTheOutcome() {
@@ -167,16 +166,17 @@ private slots:
         QCOMPARE(starter->starts, 1);
         updater->install(); // Already installing.
         QCOMPARE(starter->starts, 1);
-        starter->finish(false, "failed");
+        starter->finish(Result::Failed, "failed");
         QCOMPARE(updater->state(), Updater::State::InstallFailed);
+        QVERIFY(updater->canInstall());
 
         updater->install();
         QCOMPARE(starter->starts, 2);
         // A finished job that left this process running installed nothing.
-        starter->finish(true);
+        starter->finish(Result::Done);
         QCOMPARE(updater->state(), Updater::State::NothingInstalled);
-        QVERIFY(!updater->canInstall());
-        starter->finish(false, "late"); // Ignored outside Installing.
+        QVERIFY(!updater->offer());
+        starter->finish(Result::Failed, "late"); // Ignored outside Installing.
         QCOMPARE(updater->state(), Updater::State::NothingInstalled);
     }
 
@@ -187,29 +187,42 @@ private slots:
         updater->install();
         QCOMPARE(updater->state(), Updater::State::Installing);
         QTRY_COMPARE(updater->state(), Updater::State::InstallFailed);
-        starter->finish(true); // Too late to count.
+        starter->finish(Result::Done); // Too late to count.
         QCOMPARE(updater->state(), Updater::State::InstallFailed);
     }
 
-    void unreachableSystemdFailsWithoutStarting() {
-        SystemdUpdateStarter starter(QDBusConnection(QStringLiteral("pi-control-test-disconnected")));
-        QSignalSpy finished(&starter, &UpdateStarter::finished);
-        starter.start();
-        QTRY_COMPARE(finished.count(), 1);
-        QCOMPARE(finished.at(0).at(0).toBool(), false);
-        QVERIFY(finished.at(0).at(1).toString().contains("cannot watch systemd jobs"));
-        starter.start(); // Can be retried.
-        QTRY_COMPARE(finished.count(), 2);
-    }
-
-    void systemdStarterFollowsOnlyItsOwnJob() {
-        SystemdUpdateStarter starter(QDBusConnection(QStringLiteral("pi-control-test-disconnected")));
-        QSignalSpy finished(&starter, &UpdateStarter::finished);
-        // Without a running start, job signals are ignored.
-        QVERIFY(QMetaObject::invokeMethod(&starter, "onJobRemoved", Q_ARG(uint, 1),
-                                          Q_ARG(QDBusObjectPath, QDBusObjectPath("/job/1")),
-                                          Q_ARG(QString, kUpdateUnit), Q_ARG(QString, "failed")));
-        QCOMPARE(finished.count(), 0);
+    void systemctlExitStatusIsTheResult() {
+        QTemporaryDir dir;
+        const auto script = [&](const char* name, const QByteArray& body) {
+            const QString path = dir.filePath(name);
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly)) qFatal("cannot write %s", name);
+            file.write("#!/bin/sh\n" + body);
+            file.setPermissions(file.permissions() | QFileDevice::ExeOwner);
+            return path;
+        };
+        const QString args = dir.filePath("args");
+        struct Case {
+            QString program;
+            Result result;
+            QString detail;
+        };
+        const Case cases[] = {
+            {script("ok", "echo \"$@\" > " + args.toUtf8() + "\n"), Result::Done, {}},
+            {script("fail", "echo 'Job failed' >&2\nexit 1\n"), Result::Failed, "Job failed"},
+            {dir.filePath("missing"), Result::Failed, {}},
+        };
+        for (const Case& c : cases) {
+            SystemctlUpdateStarter starter(c.program);
+            QSignalSpy finished(&starter, &UpdateStarter::finished);
+            starter.start();
+            QTRY_COMPARE(finished.count(), 1);
+            QCOMPARE(finished.at(0).at(0).value<Result>(), c.result);
+            if (!c.detail.isEmpty()) QCOMPARE(finished.at(0).at(1).toString(), c.detail);
+        }
+        QFile recorded(args);
+        QVERIFY(recorded.open(QIODevice::ReadOnly));
+        QCOMPARE(recorded.readAll(), QByteArray("--no-ask-password start pi-control-update.service\n"));
     }
 
     void periodicChecksRepeat() {

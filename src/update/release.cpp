@@ -17,18 +17,17 @@ std::optional<Version> parseVersion(QStringView text) {
     return Version{match.capturedView(1).toUInt(), match.capturedView(2).toUInt(), match.capturedView(3).toUInt()};
 }
 
-ManifestResult parseManifest(const QByteArray& json) {
-    QJsonParseError parseError;
-    const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
-    if (!document.isObject()) return {.version = std::nullopt, .error = "manifest is not a JSON object"};
+std::variant<Version, QString> parseManifest(const QByteArray& json) {
+    const QJsonDocument document = QJsonDocument::fromJson(json);
+    if (!document.isObject()) return QString("manifest is not a JSON object");
     const QJsonObject manifest = document.object();
-    if (manifest.value("schema") != QJsonValue(1)) return {.version = std::nullopt, .error = "unsupported manifest schema"};
+    if (manifest.value("schema") != QJsonValue(1)) return QString("unsupported manifest schema");
     const auto version = parseVersion(manifest.value("version").toString());
-    if (!version) return {.version = std::nullopt, .error = "invalid manifest version"};
+    if (!version) return QString("invalid manifest version");
     static const QRegularExpression digest("^[0-9a-f]{64}$");
     const QString sha256 = manifest.value("sha256").toObject().value("linux-aarch64").toString();
-    if (!digest.match(sha256).hasMatch()) return {.version = std::nullopt, .error = "invalid manifest checksum"};
-    return {.version = version, .error = {}};
+    if (!digest.match(sha256).hasMatch()) return QString("invalid manifest checksum");
+    return *version;
 }
 
 } // namespace pi_control::update

@@ -155,14 +155,12 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::unique_ptr<update::UpdateStarter> updateStarter;
-    if (!power.dryRun || failureTest) {
-        // An unregistered connection is always disconnected: tests cannot reach systemd.
-        updateStarter = std::make_unique<update::SystemdUpdateStarter>(
-            failureTest ? QDBusConnection(QStringLiteral("pi-control-test-disconnected"))
-                        : QDBusConnection::systemBus());
+    if (power.dryRun) {
+        updateStarter = std::make_unique<update::DryRunUpdateStarter>();
+    } else {
+        updateStarter = std::make_unique<update::SystemctlUpdateStarter>();
     }
-    update::Updater updater({.current = *version, .dryRun = power.dryRun && !failureTest},
-                            std::move(updateStarter));
+    update::Updater updater({.current = *version}, std::move(updateStarter));
     app::AppShell shell;
     ScreensaverController saverController(shell.screensaverView(), std::move(saverConfig));
     const app::AppContext context{shell, saverController, power, stats, *wifiBackend, settingsStore, updater};
