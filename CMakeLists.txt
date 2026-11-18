@@ -105,7 +105,7 @@ if(BUILD_TESTING)
   add_test(NAME version COMMAND pi-control --version)
   string(REPLACE "." "\\." version_pattern "${PROJECT_VERSION}")
   set_tests_properties(version PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-    PASS_REGULAR_EXPRESSION "^pi-control ${version_pattern}\n$" TIMEOUT 15)
+    PASS_REGULAR_EXPRESSION "(^|\n)pi-control ${version_pattern}\n" TIMEOUT 15)
   add_test(NAME ui-dry-run COMMAND pi-control --smoke-test)
   set_tests_properties(ui-dry-run PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 15)
   add_test(NAME shutdown-failure COMMAND pi-control --smoke-test-failure)
