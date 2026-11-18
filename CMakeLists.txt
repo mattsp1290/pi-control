@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(pi_control VERSION 0.2.0 LANGUAGES CXX)
+project(pi_control VERSION 0.3.0 LANGUAGES CXX)
 # Release tags, the package and the in-app update check all compare X.Y.Z.
 if(NOT PROJECT_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
   message(FATAL_ERROR "project VERSION must be X.Y.Z, got ${PROJECT_VERSION}")
