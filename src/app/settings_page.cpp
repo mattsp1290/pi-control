@@ -3,7 +3,10 @@
 #include "app/app_context.h"
 #include "app/power_panel.h"
 #include "app/screensaver_panel.h"
+#include "app/update_panel.h"
 #include "app/wifi_panel.h"
+#include "screensaver/screensaver_controller.h"
+#include "update/updater.h"
 
 #include <QLabel>
 #include <QScrollArea>
@@ -33,8 +36,18 @@ SettingsPage::SettingsPage(const AppContext& context, QWidget* parent) : QWidget
     // Fixed order; Power is always last.
     addSection("Wi‑Fi", new WifiPanel(context.wifi, context.shell, context.screensaver));
     addSection("Screensaver", new ScreensaverPanel(context.screensaver, context.settings));
+    addSection("Software update", new UpdatePanel(context.updater, context.power.dryRun));
     power_ = new PowerPanel(context.power, context.screensaver);
     addSection("Power", power_);
+    // While an update installs, its progress stays on screen and Shut down
+    // waits: powering off would stop the updater partway through apt.
+    const auto guardInstall = [this, &context](update::Updater::State state) {
+        const bool installing = state == update::Updater::State::Installing;
+        context.screensaver.setInhibited(&context.updater, installing);
+        power_->setBlocked(installing ? "Shut down is unavailable while the software update installs." : QString());
+    };
+    connect(&context.updater, &update::Updater::stateChanged, this, guardInstall);
+    guardInstall(context.updater.state());
 }
 
 void SettingsPage::addSection(const QString& title, QWidget* content) {

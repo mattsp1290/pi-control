@@ -54,7 +54,10 @@ public:
     ScreensaverController(ScreensaverView& view, ScreensaverControllerConfig config, QObject* parent = nullptr);
     ~ScreensaverController() override;
 
-    void setInhibited(bool inhibited);
+    // Inhibited while any owner holds an inhibition, so independent tasks
+    // (a pending shutdown, an update) cannot release each other's.
+    // An owner destroyed while inhibiting releases its inhibition.
+    void setInhibited(const QObject* owner, bool inhibited);
     // Used from the next activation on; a running screensaver keeps going.
     // The controller keeps a pointer: descriptor must outlive it, as
     // builtinScreensavers() entries do.
@@ -64,7 +67,7 @@ public:
     // Shows the selected screensaver now, unless inhibited. Like an idle
     // activation, it waits for a held press to be released.
     void preview();
-    bool isInhibited() const { return inhibited_; }
+    bool isInhibited() const { return !inhibitors_.isEmpty(); }
     State state() const { return state_; }
     bool isActive() const { return state_ == State::Active; }
     QString activeScreensaverId() const { return activeId_; }
@@ -96,7 +99,7 @@ private:
     QPointer<ScreensaverView> view_;
     ScreensaverControllerConfig config_;
     State state_ = State::Watching;
-    bool inhibited_ = false;
+    QSet<const QObject*> inhibitors_;
     bool previewPending_ = false; // preview() waits for a held press to end.
     QString activeId_;
     QTimer idleTimer_;

@@ -3,6 +3,7 @@
 #include "app/app_context.h"
 #include "app/elided_label.h"
 #include "app/signal_bars.h"
+#include "update/updater.h"
 
 #include <QDateTime>
 #include <QGridLayout>
@@ -71,6 +72,9 @@ HomePage::HomePage(const AppContext& context, QWidget* parent)
     wifiBars_ = new SignalBars;
     wifiStrength_ = new QLabel;
     wifiStrength_->setObjectName("wifiStrengthLabel");
+    version_ = new QLabel(QString("Pi Control %1").arg(context.updater.current().toString()));
+    version_->setObjectName("versionLabel");
+    version_->setStyleSheet("font-size: 16px; color: #b8c4cf;");
 
     auto* wifiRow = new QHBoxLayout;
     wifiRow->setSpacing(10);
@@ -87,6 +91,7 @@ HomePage::HomePage(const AppContext& context, QWidget* parent)
     left->addWidget(addressesLabel_);
     left->addLayout(wifiRow);
     left->addStretch();
+    left->addWidget(version_);
 
     auto* meters = meters_ = new QGridLayout;
     meters->setHorizontalSpacing(12);
@@ -220,6 +225,7 @@ QStringList HomePage::reportLines() const {
     lines << "CPU: " + cpu_.value->text();
     lines << "Memory: " + memory_.value->text();
     lines << "Storage: " + storage_.value->text() + "  " + storageDetail_->text();
+    lines << version_->text();
     return lines;
 }
 

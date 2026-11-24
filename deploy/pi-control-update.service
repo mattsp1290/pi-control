@@ -1,0 +1,17 @@
+# Started by the kiosk's Settings → Software update button (see
+# 49-pi-control.rules). Installs the latest release only when it is newer than
+# the installed package; the package then restarts pi-control.service.
+[Unit]
+Description=Update Pi Control to the latest release
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PI_CONTROL_INSTALL_UPGRADE_ONLY=1
+Environment=DEBIAN_FRONTEND=noninteractive
+# Hold off shutdown while apt runs. The kiosk account may not override the
+# block, so its Shut down fails cleanly instead of interrupting dpkg.
+ExecStart=/usr/bin/systemd-inhibit --what=shutdown:sleep --mode=block --who=pi-control-update \
+  "--why=Installing a Pi Control update" /bin/sh /usr/lib/pi-control/install.sh
+TimeoutStartSec=20min

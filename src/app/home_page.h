@@ -68,6 +68,7 @@ private:
     QLabel* wifiLabel_;
     SignalBars* wifiBars_;
     QLabel* wifiStrength_;
+    QLabel* version_;
     Meter cpu_;
     Meter memory_;
     Meter storage_;

@@ -1,5 +1,6 @@
-// The dedicated kiosk account may request normal host poweroff, and may scan
-// for Wi-Fi networks and join, save or forget them through NetworkManager.
+// The dedicated kiosk account may request normal host poweroff, may scan for
+// Wi-Fi networks and join, save or forget them through NetworkManager, and may
+// start the packaged updater.
 polkit.addRule(function(action, subject) {
     if (subject.user === "pi-control" &&
         (action.id === "org.freedesktop.login1.power-off" ||
@@ -13,6 +14,17 @@ polkit.addRule(function(action, subject) {
         (action.id === "org.freedesktop.NetworkManager.wifi.scan" ||
          action.id === "org.freedesktop.NetworkManager.network-control" ||
          action.id === "org.freedesktop.NetworkManager.settings.modify.system")) {
+        return polkit.Result.YES;
+    }
+});
+
+// It may start the packaged updater, which installs only the latest published
+// release. It cannot stop, change or start any other unit.
+polkit.addRule(function(action, subject) {
+    if (subject.user === "pi-control" &&
+        action.id === "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") === "pi-control-update.service" &&
+        action.lookup("verb") === "start") {
         return polkit.Result.YES;
     }
 });

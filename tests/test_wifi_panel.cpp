@@ -333,13 +333,13 @@ private slots:
         PanelFixture fixture(std::move(config));
         // Hold the screensaver off while setting up, so a slow machine cannot
         // start it before the password is shown.
-        fixture.controller->setInhibited(true);
+        fixture.controller->setInhibited(this, true);
         fixture.open();
         fixture.tap(fixture.panel()->row("Neighbour5G"));
         fixture.type("abc");
         QTest::mouseClick(fixture.view()->showButton(), Qt::LeftButton);
         QCOMPARE(fixture.view()->field()->echoMode(), QLineEdit::Normal);
-        fixture.controller->setInhibited(false);
+        fixture.controller->setInhibited(this, false);
         QTRY_VERIFY_WITH_TIMEOUT(fixture.controller->isActive(), 3000);
         QCOMPARE(fixture.view()->field()->echoMode(), QLineEdit::Password);
         QToolButton* d = fixture.view()->keyboard()->key("d");
