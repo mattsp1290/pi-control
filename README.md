@@ -8,7 +8,7 @@ Three tabs run along the top:
 
 - **Home**: the time and date, each network interface's IPv4 address, the
   Wi‑Fi network and signal strength, and CPU, memory and storage use
-  (refreshed every 2 s).
+  (refreshed every 2 s), with the running Pi Control version in the footer.
 - **Example**: placeholder text showing how to add a tab. See
   [Add a tab](docs/tabs.md).
 - **Settings**, top to bottom:
